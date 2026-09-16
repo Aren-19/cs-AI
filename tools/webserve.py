@@ -9,6 +9,7 @@ implements the three endpoints the viewer actually needs, against local files.
     POST /api/csspak/batch    CS:S assets by Source path, from the local install
     GET  /api/replay?id=NAME  a shavit .replay file
     GET  /api/times           minimal record list so the UI has something to show
+                              ?sort=Newest (default) | Oldest | Fastest | Slowest
     GET  /maps/NAME.bsp.bz2   the map, bz2-compressed (cached after first build)
 
 Wire format for csspak/batch, taken from CSPakMount in noclipRenderer.ts:
@@ -253,6 +254,26 @@ class Handler(BaseHTTPRequestHandler):
                 rows = [r for r in rows if r["map"] == q["map"][0]]
             if q.get("has_replay"):
                 pass                      # every row here is backed by a replay file
+
+            # Newest first by default. The files were previously listed in
+            # filename order, which puts surf_demise_gen1000 ahead of gen999 and
+            # makes the most recent run hard to find - and the newest run is
+            # almost always the one you want to watch.
+            #
+            # The UI already sends ?sort= with one of these names and defaults to
+            # Newest; it was simply being ignored here.
+            sort = (q.get("sort", ["Newest"])[0] or "Newest").lower()
+            if sort in ("oldest", "old"):
+                rows.sort(key=lambda r: r["date"])
+            elif sort in ("fastest", "time"):
+                rows.sort(key=lambda r: (r["time"] <= 0, r["time"]))
+            elif sort == "slowest":
+                rows.sort(key=lambda r: (r["time"] <= 0, -r["time"]))
+            else:                                     # Newest
+                rows.sort(key=lambda r: r["date"], reverse=True)
+            for i, r in enumerate(rows):
+                r["rank"] = i + 1
+
             total = len(rows)
             try:
                 limit = max(1, min(int(q.get("limit", ["50"])[0]), 500))

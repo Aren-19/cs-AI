@@ -59,7 +59,14 @@ Kept minimal and marked:
 3. `replay-viewer/src/ReplayViewerOverlay.vue` — `fastdlBaseUrl` → `/maps`, so the
    BSP comes from your install rather than a public mirror (custom maps work
    offline).
-4. `replay-viewer/src/ReplayViewerOverlay.vue` — `waitForNextPaint()` falls back
+4. `offstyles-web/src/components/RecentTimes.vue` — a sort dropdown (Newest /
+   Oldest / Fastest / Slowest). The app already sent `?sort=` and already
+   defaulted it to `Newest`; there was simply no control for it, and our backend
+   ignored the parameter, so the list came out in filename order - which puts
+   `surf_demise_gen1000` above `gen999` and buries the run you just made.
+   `tools/webserve.py` now honours the parameter and sorts newest-first by
+   default.
+5. `replay-viewer/src/ReplayViewerOverlay.vue` — `waitForNextPaint()` falls back
    to a macrotask when `document.visibilityState === "hidden"`. Upstream awaits
    two `requestAnimationFrame`s, which never fire in a background tab, so the
    whole load sequence deadlocks at "Initializing renderer..." if you switch away
