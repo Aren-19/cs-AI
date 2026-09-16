@@ -45,18 +45,29 @@ DEFAULT_WEIGHTS = os.path.join(DATA, "weights.txt")
 
 
 def load(path):
+    """Returns (obs, actions, frameskip). The capture header carries the frameskip
+    the data was taken at; the decision rate depends on it, and hardcoding 2 made
+    every switch-rate figure 3x too high once frameskip 6 was in use."""
     acts, obs = [], []
+    frameskip = 2
     with open(path) as fh:
         for line in fh:
             line = line.strip()
-            if not line or line.startswith("#"):
+            if not line:
+                continue
+            if line.startswith("#"):
+                if "frameskip=" in line:
+                    try:
+                        frameskip = int(line.split("frameskip=")[1].split()[0])
+                    except (ValueError, IndexError):
+                        pass
                 continue
             p = line.split()
             if len(p) != 1 + OBS_DIM:
                 continue
             acts.append(int(float(p[0])))
             obs.append([float(v) for v in p[1:]])
-    return np.array(obs, dtype=np.float64), np.array(acts, dtype=np.int64)
+    return (np.array(obs, dtype=np.float64), np.array(acts, dtype=np.int64), frameskip)
 
 
 def main():
@@ -72,6 +83,11 @@ def main():
                     help="weight classes inversely to frequency; off by default, "
                          "because upweighting the rare trims cost more in spurious "
                          "side changes than it bought in coverage")
+    ap.add_argument("--init", default=None,
+                    help="warm-start from this checkpoint instead of random. Cloning "
+                         "from scratch on several runs averages their differing lines "
+                         "into a policy that follows none of them; starting from a "
+                         "trained policy and nudging it keeps what already works.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--print", dest="do_print", action="store_true")
     args = ap.parse_args()
@@ -81,7 +97,7 @@ def main():
         print("produce it with:  srcds ... +csai_democapture 1")
         return 1
 
-    X, y = load(args.data)
+    X, y, frameskip = load(args.data)
     if len(X) == 0:
         print("capture is empty")
         return 1
@@ -96,8 +112,8 @@ def main():
     nval = max(int(len(X) * args.val), 1)
     Xv, yv, Xt, yt = X[:nval], y[:nval], X[nval:], y[nval:]
 
-    print("samples %d  (train %d, val %d)   obs %d   actions %d"
-          % (len(X), len(Xt), len(Xv), OBS_DIM, N_ACTIONS))
+    print("samples %d  (train %d, val %d)   obs %d   actions %d   frameskip %d"
+          % (len(X), len(Xt), len(Xv), OBS_DIM, N_ACTIONS, frameskip))
 
     counts = np.bincount(y, minlength=N_ACTIONS).astype(np.float64)
     if args.balance:
@@ -107,6 +123,11 @@ def main():
     print("class weights: " + " ".join("%.2f" % v for v in w))
 
     policy = Policy(np.random.default_rng(args.seed))
+    if args.init:
+        z = np.load(args.init)
+        for i, prm in enumerate(policy.params()):
+            prm[...] = z["p%d" % i]
+        print("warm-started from %s (gen %s)" % (args.init, z["gen"] if "gen" in z else "?"))
     opt = Adam(policy.shapes(), lr=args.lr)
 
     def evaluate(Xe, ye):
@@ -168,7 +189,7 @@ def main():
     # number the jitter problem was about.
     pred_seq = policy.forward(Xseq)[0].argmax(axis=1) < N_TRIMS
     human_seq = yseq < N_TRIMS
-    hz = 66.67 / 2.0
+    hz = 66.67 / frameskip
     sw_h = float((human_seq[1:] != human_seq[:-1]).mean()) * hz
     sw_p = float((pred_seq[1:] != pred_seq[:-1]).mean()) * hz
     print("strafe-key switches: human %.2f/s, cloned %.2f/s  (pre-BC policy was 19.79/s)"

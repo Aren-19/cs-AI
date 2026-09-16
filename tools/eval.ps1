@@ -19,7 +19,13 @@ param(
     [double]$Deviation = 600,
     [int]$TimeoutSec = 600,
     [int]$Scripted   = 0,
-    [int]$Greedy     = 1
+    [int]$Greedy     = 1,
+    # These must match what the policy was TRAINED with. They did not: this
+    # hardcoded frameskip 2 while training ran at 6, so every eval replay from
+    # generation 254 on drove the policy at three times its decision rate.
+    [int]$FrameSkip  = 6,
+    [double]$DevCost = 0.5,
+    [double]$SwitchCost = 0.15
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,7 +51,9 @@ $a = @(
     '+csai_prestrafe', '1',
     '+csai_budget', $Budget,
     '+csai_deviation', $Deviation,
-    '+csai_frameskip', '2',
+    '+csai_frameskip', $FrameSkip,
+    '+csai_devcost', $DevCost,
+    '+csai_switchcost', $SwitchCost,
     '+csai_bench_timescale', $Timescale,
     '+csai_bench_quit', '1',
     '+csai_bench_delay', '8'

@@ -434,6 +434,73 @@ bot attempts this transition thousands of times per minute. The two candidates
 are more human runs covering it, and letting episodes start near it so the
 payoff is not 40 s of successful surfing away.
 
+## Eight human runs, and why cloning them failed
+
+Added an in-game recorder (`csai_record.inc`) because the timer cannot supply
+extra runs - shavit keeps one replay per map and only replaces it when you beat
+your time, so slower runs are discarded. Seven new runs were recorded, times
+39.0-40.3 s, plus the original.
+
+Offline, the extra data looks like exactly the fix the bot needed:
+
+| trained on | n | side acc across ALL runs | switches/s |
+|---|---:|---:|---:|
+| run 1 only | 406 | 0.621 | **0.18** |
+| all 8 runs | 3090 | **0.800** | **1.26** |
+| human | - | - | 1.10 |
+
+The single-run clone scores 0.850 on its own validation split and 0.621 across
+the other runs: it memorised one line. It also switches strafe key 0.18 times a
+second against the human's 1.10, which is the exact pathology seen in the bot.
+
+Closed loop, the ranking inverts:
+
+| policy | best of 5 |
+|---|---:|
+| gen 789 RL | **59.2%** |
+| gen 789 + BC fine-tune on 8 runs | 32.2% |
+| clone, 1 run | 6.8% |
+| clone, 8 runs | **1.1%** |
+
+More demonstrations made cloning worse, and fine-tuning a good policy on them
+destroyed half its performance. This is mode averaging: where one run went left
+and another went right through the same place, a single-headed policy learns the
+average of the two and follows neither. One narrow but decisive demonstrator beats
+eight that disagree.
+
+The standing lesson repeats. Imitation metrics measured on the demonstrator's own
+states said the opposite of what happened once the policy was driving.
+
+## A third measurement bug
+
+`eval.ps1` hardcoded `+csai_frameskip 2` while training ran at 6, so from
+generation 254 every eval replay drove the policy at three times its decision
+rate. The 59% analysis in the previous section was performed on one of those
+replays and had to be redone. `eval.ps1` now takes `-FrameSkip`, `-DevCost` and
+`-SwitchCost`, and the daemon passes its own settings through.
+
+Three measurement bugs in one day - replayqa counting view jumps instead of key
+changes, bc.py hardcoding the decision rate, eval.ps1 hardcoding frameskip. Each
+produced confident, wrong numbers that drove a decision. The tooling deserves the
+same suspicion as the policy.
+
+## The wall, measured correctly
+
+| | human | bot (gen 789) |
+|---|---:|---:|
+| speed at 51.0% | 3586 | 3516 |
+| speed at 51.5% | 3587 | **1450** |
+| speed 52-59% | 3587-3811 | 3225-3254 |
+| z at 57% | 4771 | 4625 |
+| z at 59.5% | 4443 | 3812 |
+
+The failure does not start at 59%. It starts at **51.5%**, where the bot loses
+2000 u/s in a single tick - it clips something. It never recovers the human's
+speed afterwards, running the rest of the section ~580 u/s slow, which is why it
+sinks through the 58-60% descent and leaves the corridor at 59.5%.
+
+Chasing the switch timing at 59% was chasing a symptom.
+
 ## Standing lesson
 
 Every real defect was in the agent's **interface to the game** — what

@@ -161,6 +161,7 @@ function Invoke-Eval {
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                         (Join-Path $Root 'tools\eval.ps1'), '-Runs', '3',
                         '-Greedy', '0',
+                        '-FrameSkip', $FrameSkip, '-DevCost', $DevCost,
                         '-Timescale', '20', '-TimeoutSec', '600') `
         -WorkingDirectory $Root -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue | Out-Null
 }
