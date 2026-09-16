@@ -24,20 +24,40 @@ choose [2], so you can start it and walk away for hours.
 ## Power levels
 
 How much of the machine training is allowed to use. Change it at any time,
-including mid-run — it takes effect within ~15 seconds and **nothing trained is
-lost**, because the learner checkpoints every generation and resumes from it.
+including mid-run - it takes effect within ~15 seconds and **nothing trained is
+lost**, because the learner saves every generation and picks up where it left off.
 
-| level | timescale | priority | when to use |
-|---|---:|---|---|
-| idle | 5× | Idle | gaming or watching video |
-| low | 20× | BelowNormal | you're working on the PC |
-| medium | 50× | Normal | background |
-| **high** | **80×** | Normal | **default** |
-| max | 150× | AboveNormal | you're away |
+| level | servers | when to use |
+|---|---:|---|
+| idle | 1 | gaming or watching video |
+| low | 2 | you are working on the PC |
+| medium | 4 | background |
+| **high** | **6** | **default, about half the machine** |
+| max | 11 | you are away |
 
-`high` is the measured knee of the throughput curve (5136 ticks/s); `max` buys
-only ~6% more for noticeably more disruption. Use `max` overnight, `low` or `idle`
-while you're at the machine.
+The thing that makes training faster is **how many copies of the server run at
+once**, not how fast each one is told to go. One server only uses one core, and
+once several are running each manages about 23-32x real speed - nowhere near the
+80x it is aiming for. Telling it to go faster than it can does nothing.
+
+Measured on a 6-core Ryzen 7500F, total game ticks simulated per second:
+
+| servers | ticks/s |
+|---:|---:|
+| 6 | 15276 |
+| 10 | 21586 |
+| **12** | **22915** |
+| 14 | 22066 |
+
+It keeps improving past 6 servers even though the CPU has 6 cores, because the
+server spends a lot of time waiting on memory and the spare thread on each core
+can use that gap. 12 is the best it gets; 14 is worse. `max` uses 11 and leaves
+room for the trainer itself.
+
+**The graphics card does nothing here and cannot.** The server has no renderer
+and loads no textures at all - about 200 MB each, all of it map geometry and
+game logic. The physics is plain C++ on one core and there is no version of it
+that runs on a GPU. Spare VRAM cannot help.
 
 ## Watching replays
 

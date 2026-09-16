@@ -38,12 +38,23 @@ $StopFile = Join-Path $Root 'data\daemon.stop'
 
 # timescale 80 is the measured knee of the throughput curve (5136 ticks/s);
 # 150 buys only ~6% more. The lower levels exist to give the machine back.
+# How much of the machine to use. The lever is the NUMBER of servers, not the
+# timescale: one server is single-threaded and, once several are running, each
+# manages only 23-32x realtime - far below even the 80 it is told to target. So
+# raising timescale past that does nothing at all, which is why the old 'max'
+# (150x, same single server) was no faster than 'high'.
+#
+# Measured on a 6-core / 12-thread Ryzen 7500F, total simulated ticks/s:
+#     6 actors 15276   10 actors 21586   12 actors 22915   14 actors 22066
+# It keeps climbing past the physical core count because the server loop stalls
+# on memory often enough for SMT to do real work. 12 is the knee; 14 is worse.
+# The learner needs about half a core, so the top level leaves it room.
 $Levels = @{
-    'idle'   = @{ Timescale = 5;   Priority = 'Idle';          Batch = 32; Desc = 'barely noticeable - gaming or video' }
-    'low'    = @{ Timescale = 20;  Priority = 'BelowNormal';   Batch = 48; Desc = 'you are using the PC' }
-    'medium' = @{ Timescale = 50;  Priority = 'Normal';        Batch = 64; Desc = 'background work' }
-    'high'   = @{ Timescale = 80;  Priority = 'Normal';        Batch = 64; Desc = 'default - knee of the curve' }
-    'max'    = @{ Timescale = 150; Priority = 'AboveNormal';   Batch = 96; Desc = 'you are away' }
+    'idle'   = @{ Timescale = 5;   Priority = 'Idle';        Batch = 32; Actors = 1;  Desc = 'barely noticeable - gaming or video' }
+    'low'    = @{ Timescale = 20;  Priority = 'BelowNormal'; Batch = 48; Actors = 2;  Desc = 'you are using the PC' }
+    'medium' = @{ Timescale = 80;  Priority = 'Normal';      Batch = 64; Actors = 4;  Desc = 'background work' }
+    'high'   = @{ Timescale = 80;  Priority = 'Normal';      Batch = 64; Actors = 6;  Desc = 'default - half the machine' }
+    'max'    = @{ Timescale = 80;  Priority = 'AboveNormal'; Batch = 96; Actors = 11; Desc = 'you are away - all of it' }
 }
 
 function Write-Log([string]$msg) {
@@ -187,14 +198,9 @@ Start-Sleep -Seconds 2
 # One srcds saturates a core at ~5400 ticks/s, so throughput past that comes
 # from more instances. Leave headroom for the learner, the eval run and the
 # machine itself rather than claiming every core.
-# Measured on a 12-logical-core machine, steps/s against one actor:
-#   1 actor  2245   (baseline, one saturated core at ~4500 ticks/s)
-#   4 actors 8739   (3.89x, 97% scaling)
-#   6 actors 12005  (5.35x, 89% scaling)
-# Past this the learner and the machine itself start to lose out.
-if ($Actors -le 0) {
-    $Actors = [Math]::Max(1, [Math]::Min(6, [int]([Environment]::ProcessorCount / 2)))
-}
+# -Actors overrides the power level's own count; 0 means follow the level.
+$ActorsOverride = $Actors
+if ($Actors -le 0) { $Actors = $Levels[$level].Actors }
 
 Start-Learner
 Start-Sleep -Seconds 3
@@ -220,6 +226,17 @@ while ($true) {
     $want = Get-Power
     if ($want -ne $appliedLevel) {
         Write-Log "power changed: $appliedLevel -> $want ($($Levels[$want].Desc))"
+        $newCount = if ($ActorsOverride -gt 0) { $ActorsOverride } else { $Levels[$want].Actors }
+        if ($newCount -ne $Actors) {
+            Write-Log "  actors: $Actors -> $newCount"
+            foreach ($k in @($ActorPids.Keys)) {
+                if ($k -ge $newCount) {
+                    Stop-Process -Id $ActorPids[$k] -Force -ErrorAction SilentlyContinue
+                    $ActorPids.Remove($k)
+                }
+            }
+            $Actors = $newCount
+        }
         foreach ($apid in @($ActorPids.Values)) {
             Stop-Process -Id $apid -Force -ErrorAction SilentlyContinue
         }
