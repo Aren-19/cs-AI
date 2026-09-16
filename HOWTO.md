@@ -81,48 +81,74 @@ To switch, set `'+csai_states', '0'` in `tools/daemon.ps1` (1 = always the start
 `docs/experiments.md`, which measured progress from a random checkpoint. The
 honest end-to-end number is the eval line in the report.
 
-## Adding more of your own runs
+## Recording your own runs
 
-This is the highest-value thing you can do for the bot right now.
+This is the most useful thing you can do for the bot right now.
 
-The policy learns technique by cloning your inputs, and it currently has **one
-run** to learn from — 1213 decisions, all on a single line. It has never seen a
-state slightly off that line, which is exactly why it surfs cleanly and then
-fails to recover: it rides one ramp beautifully and falls where your line would
-have switched.
+It learns technique by copying you, and it has exactly one run to copy from. It
+has never seen what happens when you are slightly off your usual line, which is
+why it surfs a ramp nicely and then has no idea how to save itself.
 
-More recorded runs fix this directly. They do not need to be perfect or fast —
-**varied** is worth more than clean here, because the value is in covering states
-your best run never visits. A run that wobbles and recovers is *especially*
-useful.
+### Just play
 
-### How to add one
+Recording is automatic and always on. Play the map normally and **every run you
+finish is saved**, fast or slow. You will see a chat message when it happens:
 
-1. Run the map normally with your timer so it records a `.replay`.
-2. Convert it to a demo file, numbering it after the ones already there:
-
-```bash
-python tools/replay.py "path	o\your.replay" --demo "C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrikeddons\sourcemod\data\csai\surf_demise_demo_2.txt"
+```
+[CsAI] saved run 2 - 41.83s, 2 runs now available
 ```
 
-The naming is `surf_demise_demo.txt`, then `_2`, `_3`, ... up to 32. They must be
-contiguous — the first gap ends the set.
+Runs are numbered and never overwrite each other, up to 32 of them.
 
-3. Recapture and retrain:
+The timer cannot do this for you, which is why this exists. It keeps one replay
+per map and only replaces it when you beat your time, so a slower run is thrown
+away. Slower runs are exactly the ones worth keeping here.
+
+### Before you play
+
+Stop training first, or set the power to idle. Six copies of the server are using
+your CPU and the game will feel awful otherwise. Use [2] or [3] in `CsAI.bat`.
+
+### What kind of runs help
+
+Not your best ones. **Messy runs are worth more than clean ones.**
+
+The bot already knows what a good line looks like. What it does not know is what
+to do when it is too low, too fast, or drifting wide, because you have never
+shown it. A run where you clip a ramp, wobble and recover teaches it the
+recovery. A perfect run teaches it nothing it does not already have.
+
+So: do a few normal runs, and a few where you deliberately take it wide, come in
+low, or scrape through a section badly and save it. Five or six runs is plenty to
+start with.
+
+### Commands
+
+Type these in chat:
+
+| command | what it does |
+|---|---|
+| `!csai_runs` | how many runs are saved, and whether it is recording now |
+| `!csai_save` | save what you have done so far without finishing |
+| `!csai_drop` | throw away the current recording and start again |
+
+`!csai_save` is for partial runs. If you want to give it a specific hard section
+and not the whole map, run into that section and save there.
+
+### Then retrain
+
+Once the runs are in:
 
 ```bash
 python tools/bc.py --epochs 400 --print
 ```
 
-(Capture runs automatically as part of training startup; to force it now, launch
-srcds with `+csai_democapture 1`.)
+Stop training before you do this. `bc.py` republishes the bot's brain as
+generation 1, which throws away the training done since the last copy. Start
+training again afterwards.
 
-Capture replays every run through real physics in one pass and appends them all,
-so 5 runs gives ~6000 samples instead of 1213. Verified working at 3 runs.
-
-**Note:** `bc.py` republishes `weights.txt` as generation 1, which discards RL
-progress made since cloning. Stop training first, add the runs, retrain, then
-start training again.
+Capture replays every recorded run through real physics in one pass, so five runs
+gives about 6000 examples instead of 1200.
 
 ## Reports
 

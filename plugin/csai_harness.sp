@@ -23,6 +23,7 @@
 #include "csai_replay.inc"
 #include "csai_prestrafe.inc"
 #include "csai_demo.inc"
+#include "csai_record.inc"
 #include "csai_episode.inc"
 #include "csai_train.inc"
 
@@ -134,6 +135,11 @@ public void OnPluginStart()
     RegServerCmd("csai_train",  Cmd_Train,  "csai_train <batches> <sync 0|1> <quit 0|1> - start training");
     RegServerCmd("csai_train_stop", Cmd_TrainStop, "Stop training");
     RegServerCmd("csai_democapture", Cmd_DemoCapture, "Replay the human run and capture behaviour-cloning data");
+
+    // Typed in chat as !csai_save / !csai_drop / !csai_runs
+    RegConsoleCmd("sm_csai_save", Cmd_RecSave, "Save the run you just did");
+    RegConsoleCmd("sm_csai_drop", Cmd_RecDrop, "Throw away the current recording and start over");
+    RegConsoleCmd("sm_csai_runs", Cmd_RecRuns, "How many recorded runs this map has");
     RegServerCmd("csai_prestrafe", Cmd_Prestrafe, "csai_prestrafe <0|1> - replay the recorded prestrafe before each run");
     RegServerCmd("csai_scripted", Cmd_Scripted, "csai_scripted <0|1> - hand-coded controller (interface test)");
     RegServerCmd("csai_eval",   Cmd_Eval,   "csai_eval <runs> - greedy evaluation from state 0");
@@ -264,6 +270,16 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
                              float angles[3], int &weapon, int &subtype, int &cmdnum,
                              int &tickcount, int &seed, int mouse[2])
 {
+    // Real players: observe only, never modify. This is how extra human runs
+    // get recorded; the timer will not supply them (one replay per map, kept
+    // only when you beat it).
+    if (client != g_iBot && !IsFakeClient(client) && IsPlayerAlive(client))
+    {
+        Rec_Human_Track(client);
+        Rec_Human_Tick(client, buttons, angles);
+        return Plugin_Continue;
+    }
+
     if (g_bDemoActive && client == g_iBot && IsPlayerAlive(client))
     {
         if (!Demo_Tick(client, buttons, vel, angles))
@@ -1043,5 +1059,60 @@ public Action Cmd_DemoCapture(int args)
 {
     UnfreezeBot();
     Demo_Begin(g_iBot);
+    return Plugin_Handled;
+}
+
+
+// ------------------------------------------------------- recording runs ----
+//
+// Global forwards, so implementing them adds no load-time dependency on the
+// timer. Without it they never fire and the manual commands below still work.
+
+public Action Shavit_OnStart(int client, int track)
+{
+    if (client != g_iBot && !IsFakeClient(client))
+    {
+        Rec_Human_Track(client);
+        // Everything still buffered is the prestrafe, bounded so a failed
+        // attempt or a spell of idling does not ride along in the file.
+        Rec_Human_TrimPre();
+        g_iRecHumanPre = g_iRecHumanCount;
+    }
+    return Plugin_Continue;
+}
+
+public void Shavit_OnFinish(int client, int style, float time, int jumps, int strafes,
+                            float sync, int track, float oldtime, float perfs,
+                            float avgvel, float maxvel, int timestamp)
+{
+    if (client != g_iBot && !IsFakeClient(client))
+        Rec_Human_Save(client);
+}
+
+public Action Cmd_RecSave(int client, int args)
+{
+    Rec_Human_Track(client);
+    Rec_Human_Save(client);
+    return Plugin_Handled;
+}
+
+public Action Cmd_RecDrop(int client, int args)
+{
+    Rec_Human_Reset();
+    if (client > 0 && IsClientInGame(client))
+        PrintToChat(client, "[CsAI] recording restarted");
+    return Plugin_Handled;
+}
+
+public Action Cmd_RecRuns(int client, int args)
+{
+    int n = Demo_CountFiles();
+    if (client > 0 && IsClientInGame(client))
+    {
+        PrintToChat(client, "[CsAI] %d recorded run(s) for this map", n);
+        PrintToChat(client, "[CsAI] recording now: %d ticks%s", g_iRecHumanCount,
+                    (g_iRecHumanPre >= 0) ? " (timer running)" : " (waiting for timer)");
+    }
+    PrintToServer("[CsAI] %d recorded run(s), buffer %d ticks", n, g_iRecHumanCount);
     return Plugin_Handled;
 }
