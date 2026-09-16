@@ -224,6 +224,8 @@ void ArmBenchmark()
     g_iActorId        = GetCommandLineParamInt("+csai_actor", 0);
     g_fSwitchCost     = GetCommandLineParamFloat("+csai_switchcost", g_fSwitchCost);
     g_fDeviationCost  = GetCommandLineParamFloat("+csai_devcost", g_fDeviationCost);
+    g_iPitchMode      = GetCommandLineParamInt("+csai_pitch", g_iPitchMode);
+    g_fPitchFixed     = GetCommandLineParamFloat("+csai_pitchfixed", g_fPitchFixed);
     int seed          = GetCommandLineParamInt("+csai_seed", 0);
     if (seed != 0)
         Pol_Seed(seed);
@@ -992,6 +994,8 @@ public Action Cmd_Cfg(int args)
     else if (StrEqual(key, "frameskip"))  g_iFrameSkip    = (StringToInt(val) < 1) ? 1 : StringToInt(val);
     else if (StrEqual(key, "deviation"))  g_fMaxDeviation = StringToFloat(val);
     else if (StrEqual(key, "devcost"))    g_fDeviationCost = StringToFloat(val);
+    else if (StrEqual(key, "pitch"))      g_iPitchMode = StringToInt(val);
+    else if (StrEqual(key, "pitchfixed")) g_fPitchFixed = StringToFloat(val);
     else if (StrEqual(key, "switchcost")) g_fSwitchCost = StringToFloat(val);
     else if (StrEqual(key, "states"))     g_iTrainStates  = StringToInt(val);
     else if (StrEqual(key, "budget"))     g_iEpTickBudget = StringToInt(val);

@@ -38,6 +38,9 @@ def analyse(path):
     if len(fr) < 3:
         return None
 
+    pitch = np.array([f.ang[0] for f in fr])
+    dpitch = np.abs(np.diff(pitch)) if len(pitch) > 1 else np.zeros(1)
+
     yaw = np.array([f.ang[1] for f in fr])
     dyaw = np.array([math.remainder(float(yaw[i] - yaw[i - 1]), 360.0)
                      for i in range(1, len(yaw))])
@@ -91,6 +94,8 @@ def analyse(path):
         "smooth_med": float(np.median(smooth)) if len(smooth) else 0.0,
         "smooth_p95": float(np.percentile(smooth, 95)) if len(smooth) else 0.0,
         "phi_in_window": inwin,
+        "pitch_med": float(np.median(pitch)),
+        "pitch_dp95": float(np.percentile(dpitch, 95)),
         "phi_med_abs": float(np.median(np.abs(phis))) if len(phis) else 0.0,
         "speed_med": float(np.median(speeds)),
         "speed_max": float(np.max(speeds)),
@@ -107,16 +112,20 @@ def main():
         print("nothing to analyse")
         return 1
 
-    print("%-26s %6s %7s %8s %9s %10s %8s" %
-          ("replay", "secs", "flips/s", "med|dyaw|", "p95|dyaw|", "phi in win", "med spd"))
+    print("%-26s %6s %7s %8s %9s %10s %8s %7s %6s" %
+          ("replay", "secs", "flips/s", "med|dyaw|", "p95|dyaw|", "phi in win",
+           "med spd", "pitch", "dp95"))
     for a in rows:
-        print("%-26s %6.2f %7.2f %8.2f %9.2f %9.1f%% %8.0f" %
+        print("%-26s %6.2f %7.2f %8.2f %9.2f %9.1f%% %8.0f %7.1f %6.2f" %
               (a["name"], a["secs"], a["flips_per_s"], a["smooth_med"],
-               a["smooth_p95"], a["phi_in_window"], a["speed_med"]))
+               a["smooth_p95"], a["phi_in_window"], a["speed_med"],
+               a["pitch_med"], a["pitch_dp95"]))
 
     print()
     print("phi in win = %% of strafing frames with |phi| in (85,95) deg, i.e. in the")
     print("             only range where air acceleration does anything at surf speed.")
+    print("pitch      = median view pitch, and 95th pct of per-tick change.")
+    print("             Human on surf_demise: 9.3 deg, 0.30 deg/tick.")
     print("flips/s    = strafe-key switches per second, from the buttons.")
     print("             Human on surf_demise: 0.77/s overall, 98.1%% phi in window.")
     return 0

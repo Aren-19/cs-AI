@@ -69,6 +69,36 @@ float g_fMaxDeviation  = 600.0;    // units off the centerline before we call it
  * bites.
  */
 float g_fDeviationCost = 0.5;
+
+/**
+ * Where the bot looks vertically.
+ *
+ * Source zeroes the z component of the forward and right vectors and renormalises
+ * them before building wishdir, so pitch does not enter the movement maths at
+ * all. It was therefore left at 0 - and the bot spent every run staring dead
+ * level, which no player does and which makes the replays look wrong however
+ * good the line is.
+ *
+ * Fitted to the 8 recorded human runs. They track their own velocity direction
+ * at about 57% gain with a 6 degree downward bias (correlation 0.69), and they
+ * move the mouse very smoothly: 0.08 deg per tick median, 0.30 at p95. A
+ * first-order lag of 0.05 with a 0.30 deg/tick cap reproduces that (0.10 median,
+ * 0.30 p95) - matching how it MOVES matters more for looking human than matching
+ * the exact angle.
+ *
+ * mode 0 = flat (what it did before), 1 = natural, 2 = fixed at g_fPitchFixed
+ * (only for checking that pitch really is inert).
+ */
+#define PITCH_GAIN   0.575
+#define PITCH_BIAS   6.06
+#define PITCH_ALPHA  0.05
+#define PITCH_CAP    0.30
+#define PITCH_MIN  (-20.0)
+#define PITCH_MAX    70.0
+
+int   g_iPitchMode  = 1;
+float g_fPitchFixed = 0.0;
+float g_fEpPitch    = 0.0;   // current smoothed pitch
 int   g_iEpTickBudget  = 4000;
 int   g_iTrainStates   = 0;        // 0 = sample from all loaded states
 
@@ -297,7 +327,28 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 	while (viewYaw >  180.0) viewYaw -= 360.0;
 	while (viewYaw < -180.0) viewYaw += 360.0;
 
-	angles[0] = 0.0;
+	if (g_iPitchMode == 1)
+	{
+		float vp = -RadToDeg(ArcTangent2(vel[2], (speed > 1.0) ? speed : 1.0));
+		float target = PITCH_GAIN * vp + PITCH_BIAS;
+		if (target < PITCH_MIN) target = PITCH_MIN;
+		if (target > PITCH_MAX) target = PITCH_MAX;
+
+		float step = (target - g_fEpPitch) * PITCH_ALPHA;
+		if (step >  PITCH_CAP) step =  PITCH_CAP;
+		if (step < -PITCH_CAP) step = -PITCH_CAP;
+		g_fEpPitch += step;
+	}
+	else if (g_iPitchMode == 2)
+	{
+		g_fEpPitch = g_fPitchFixed;
+	}
+	else
+	{
+		g_fEpPitch = 0.0;
+	}
+
+	angles[0] = g_fEpPitch;
 	angles[1] = viewYaw;
 	angles[2] = 0.0;
 
@@ -395,6 +446,9 @@ stock void Ep_Reset()
 
 	float closest[3], dist;
 	g_fEpStartS = Track_Project(pos, g_iTrackHint, closest, dist);
+
+	// Start where the human's view sits at handover rather than snapping from 0.
+	g_fEpPitch      = PITCH_BIAS;
 
 	g_fEpLastS      = g_fEpStartS;
 	g_fEpBestS      = g_fEpStartS;

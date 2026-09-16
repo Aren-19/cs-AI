@@ -501,6 +501,38 @@ sinks through the 58-60% descent and leaves the corridor at 59.5%.
 
 Chasing the switch timing at 59% was chasing a symptom.
 
+## Vertical aim
+
+The bot held pitch at exactly 0 for every run - staring dead level, which no
+player does and which makes a replay look wrong however good the line is.
+
+Source zeroes the z component of the forward and right vectors and renormalises
+before building wishdir, so pitch never enters the movement maths. Verified
+rather than assumed: a fixed 45 degree pitch and the fitted natural pitch produce
+**bit-identical** runs (72.6 / 72.7 / 53.3 in both). Pitch is free to set for
+looks alone.
+
+(The first attempt at that test ran while six actors were training and gave
+different results for identical configs. Physics depends on frame timing and the
+machine was loaded. Determinism tests need a quiet machine.)
+
+Fitted to the 8 recorded runs: the human tracks their own velocity direction at
+0.575 gain with a 6.06 degree downward bias, correlation 0.69. More important
+than the angle is how it MOVES - 0.08 deg/tick median, 0.30 at p95 - so a
+first-order lag of 0.05 with a 0.30 deg/tick cap was fitted to reproduce that.
+
+| | bot gen 1143 | human |
+|---|---:|---:|
+| median pitch | 10.7 deg | 8.5 deg |
+| pitch change p95 | 0.30 deg/tick | 0.31 deg/tick |
+| strafe switches/s | 1.50 | 1.05 |
+| median abs dyaw | 0.45 deg | 0.33 deg |
+| phi in window | 97.9% | 97.8% |
+| median speed | 3356 | 3589 |
+
+Greedy evaluation reaches 72.6% at generation 1143, against 6.0% at generation
+143.
+
 ## Standing lesson
 
 Every real defect was in the agent's **interface to the game** — what
