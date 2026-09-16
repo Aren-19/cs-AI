@@ -1,0 +1,17 @@
+build/
+data/*.csv
+data/*.npz
+__pycache__/
+*.pyc
+web/*/node_modules/
+data/webcache/
+data/*.mesh
+logs/
+reports/
+data/power.txt
+data/daemon.stop
+
+# Upstream clones - third-party, unlicensed, and they carry their own git history.
+# web/run.ps1 clones them on demand; see web/README.md.
+web/offstyles-web/
+web/replay-viewer/
