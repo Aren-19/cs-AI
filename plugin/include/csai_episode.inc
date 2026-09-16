@@ -102,6 +102,34 @@ float g_fEpPitch    = 0.0;   // current smoothed pitch
 int   g_iEpTickBudget  = 4000;
 int   g_iTrainStates   = 0;        // 0 = sample from all loaded states
 
+/**
+ * Mixed starts.
+ *
+ * PPO improves by comparing better outcomes against worse ones. At the drop at
+ * 72% of surf_demise there was nothing to compare: best progress sat between
+ * 73.02% and 73.07% for a hundred generations - roughly 9600 episodes, not one
+ * of which got past. With every episode ending identically there is no gradient
+ * to climb, and more training cannot help. The bot was not short of practice at
+ * that drop; it was short of a single example of clearing it.
+ *
+ * So a fraction of episodes begin from a replay checkpoint inside a chosen
+ * stretch of the map, where the policy is close enough that random exploration
+ * sometimes succeeds. The rest still run the whole map from the start, so the
+ * objective stays "finish the run" rather than "advance from anywhere".
+ *
+ * The window is in the checkpoint file's own units, which are a fraction of the
+ * reference run's TIME, not of track distance - checkpoints are spaced evenly in
+ * time, 1.70 s apart on this map. The drop sits at 31-32 s of a 39.1 s run, so
+ * 0.68-0.79 picks the three checkpoints just before it (27.2 s, 28.9 s, 30.6 s)
+ * and the bot flies into the drop carrying its own speed rather than starting
+ * inside it.
+ *
+ * Set the window around whatever the policy cannot pass; 0 mix disables it.
+ */
+float g_fStateMix      = 0.0;      // share of episodes starting mid-map
+float g_fStateLo       = 0.68;     // window to sample those from, as time fraction
+float g_fStateHi       = 0.79;
+
 int   g_iEpOutcome     = EP_RUNNING;
 int   g_iEpTick        = 0;
 int   g_iEpSteps       = 0;
@@ -163,6 +191,7 @@ File  g_hBatchFile     = null;
 // rolling stats for the console
 float g_fStatReturnSum = 0.0;
 float g_fStatProgSum   = 0.0;
+int   g_iStatMidStart  = 0;   // episodes that began away from the map start
 int   g_iStatFell      = 0;
 int   g_iStatFinished  = 0;
 int   g_iStatTimeout   = 0;
@@ -191,6 +220,7 @@ stock void Ep_OpenBatch()
 	g_iBatchEpisodes = 0;
 	g_fStatReturnSum = 0.0;
 	g_fStatProgSum   = 0.0;
+	g_iStatMidStart  = 0;
 	g_iStatFell = 0;
 	g_iStatFinished = 0;
 	g_iStatTimeout = 0;
@@ -198,6 +228,29 @@ stock void Ep_OpenBatch()
 
 stock int Ep_PickStartState()
 {
+	// The mixed-start window is drawn from every loaded checkpoint, not just the
+	// first g_iTrainStates of them - with states=1 that list is only the map
+	// start, which is exactly the case this exists to help.
+	if (g_fStateMix > 0.0 && g_iStateCount > 1 && Pol_Rand() < g_fStateMix)
+	{
+		int lo = -1, hi = -1;
+		for (int i = 0; i < g_iStateCount; i++)
+		{
+			if (g_fStateFrac[i] > g_fStartMaxFrac)
+				break;
+			if (lo < 0 && g_fStateFrac[i] >= g_fStateLo)
+				lo = i;
+			if (g_fStateFrac[i] <= g_fStateHi)
+				hi = i;
+		}
+		if (lo >= 0 && hi >= lo)
+		{
+			int span = hi - lo + 1;
+			int p = lo + RoundToFloor(Pol_Rand() * float(span));
+			return (p > hi) ? hi : p;
+		}
+	}
+
 	int n = (g_iTrainStates > 0 && g_iTrainStates <= g_iStateCount) ? g_iTrainStates : g_iStateCount;
 
 	// Drop start states too close to the finish: an episode beginning there trips
@@ -422,6 +475,8 @@ stock void Ep_Begin()
 	g_hEpBuf.Clear();
 
 	g_iEpStartState = Ep_PickStartState();
+	if (g_iEpStartState != 0)
+		g_iStatMidStart++;
 	UnfreezeBot();
 
 	// Starting at the map start means replaying the recorded prestrafe first:

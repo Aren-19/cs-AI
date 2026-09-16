@@ -33,6 +33,7 @@ int  g_iTrainBatches   = 0;        // batches remaining; <0 = unlimited
  */
 int  g_iActorId        = 0;
 
+float g_fEvalSavedMix  = 0.0;
 int  g_iTrainDone      = 0;
 bool g_bTrainQuitAfter = false;
 float g_fTrainStart    = 0.0;   // start of the current batch
@@ -70,8 +71,8 @@ stock void Train_ReportBatch()
 	float meanRet  = (g_iBatchEpisodes > 0) ? (g_fStatReturnSum / float(g_iBatchEpisodes)) : 0.0;
 	float meanProg = (g_iBatchEpisodes > 0) ? (g_fStatProgSum   / float(g_iBatchEpisodes)) : 0.0;
 
-	PrintToServer("[CsAI] batch %d gen %d | eps %d | return %.2f | progress %.1f%% | fell %d fin %d to %d | %.1fs",
-	              g_iBatchIndex, g_iPolicyGen, g_iBatchEpisodes,
+	PrintToServer("[CsAI] batch %d gen %d | eps %d (mid %d) | return %.2f | progress %.1f%% | fell %d fin %d to %d | %.1fs",
+	              g_iBatchIndex, g_iPolicyGen, g_iBatchEpisodes, g_iStatMidStart,
 	              meanRet, meanProg * 100.0,
 	              g_iStatFell, g_iStatFinished, g_iStatTimeout, elapsed);
 }
@@ -118,6 +119,8 @@ stock void Train_Begin(int batches, bool sync, bool quitAfter)
 
 	PrintToServer("[CsAI] training: %d batches x %d episodes, sync=%s, states=%d, obs=%d, actions=%d",
 	              batches, g_iBatchTarget, sync ? "yes" : "no", g_iStateCount, OBS_DIM, POL_ACTIONS);
+	PrintToServer("[CsAI] mixed starts: mix=%.2f window=%.2f..%.2f of %d states",
+	              g_fStateMix, g_fStateLo, g_fStateHi, g_iStateCount);
 
 	Ep_OpenBatch();
 	Ep_Begin();
@@ -272,6 +275,8 @@ stock void Eval_Begin(int runs)
 	// greedy eval produced 3.8% / 27.1% / 34.8% / 45.7% on identical settings.
 	g_iEvalSavedStates = g_iTrainStates;
 	g_iTrainStates = 1;         // always state 0
+	g_fEvalSavedMix = g_fStateMix;
+	g_fStateMix = 0.0;          // never start an eval run mid-map
 	g_iBatchTarget = runs + 1;  // never roll a batch mid-eval
 
 	PrintToServer("[CsAI] eval: %d greedy runs from state 0, policy gen %d", runs, g_iPolicyGen);
@@ -324,6 +329,7 @@ stock void Eval_EpisodeDone()
 		g_bEval = false;
 		g_bTraining = false;
 		g_iTrainStates = g_iEvalSavedStates;
+		g_fStateMix = g_fEvalSavedMix;
 		delete g_hBatchFile;
 		if (g_bTrainQuitAfter)
 			ServerCommand("quit");

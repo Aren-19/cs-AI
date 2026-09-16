@@ -220,6 +220,9 @@ void ArmBenchmark()
     g_iBatchTarget    = GetCommandLineParamInt("+csai_batch", g_iBatchTarget);
     g_iFrameSkip      = GetCommandLineParamInt("+csai_frameskip", g_iFrameSkip);
     g_iTrainStates    = GetCommandLineParamInt("+csai_states", g_iTrainStates);
+    g_fStateMix       = GetCommandLineParamFloat("+csai_statemix", g_fStateMix);
+    g_fStateLo        = GetCommandLineParamFloat("+csai_statelo", g_fStateLo);
+    g_fStateHi        = GetCommandLineParamFloat("+csai_statehi", g_fStateHi);
     g_iEpTickBudget   = GetCommandLineParamInt("+csai_budget", g_iEpTickBudget);
     g_fMaxDeviation   = GetCommandLineParamFloat("+csai_deviation", g_fMaxDeviation);
     g_bEvalGreedy     = (GetCommandLineParamInt("+csai_evalgreedy", 1) != 0);
@@ -1002,6 +1005,9 @@ public Action Cmd_Cfg(int args)
     else if (StrEqual(key, "pitchfixed")) g_fPitchFixed = StringToFloat(val);
     else if (StrEqual(key, "switchcost")) g_fSwitchCost = StringToFloat(val);
     else if (StrEqual(key, "states"))     g_iTrainStates  = StringToInt(val);
+    else if (StrEqual(key, "statemix"))   g_fStateMix     = StringToFloat(val);
+    else if (StrEqual(key, "statelo"))    g_fStateLo      = StringToFloat(val);
+    else if (StrEqual(key, "statehi"))    g_fStateHi      = StringToFloat(val);
     else if (StrEqual(key, "budget"))     g_iEpTickBudget = StringToInt(val);
     else if (StrEqual(key, "seed"))       Pol_Seed(StringToInt(val));
     else PrintToServer("[CsAI] unknown cfg key '%s'", key);

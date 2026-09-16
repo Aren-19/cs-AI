@@ -114,6 +114,12 @@ def main():
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--minibatch", type=int, default=4096)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--max-lag", dest="max_lag", type=int, default=12,
+                    help="drop batches produced by a policy this many generations "
+                         "behind. With sync on, one consumed batch unblocks every "
+                         "actor at once, so the queue grows and the oldest entries "
+                         "become far too off-policy for PPO's trust region to mean "
+                         "anything. 0 disables the check.")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--kl-ref", dest="kl_ref", type=float, default=0.03,
                     help="penalty on moving away from the cloned policy; 0 disables")
@@ -212,6 +218,20 @@ def main():
             continue
 
         info = read_done(donep)
+
+        # Too far behind the current policy to be worth an update.
+        batch_gen = int(info.get("gen", gen))
+        if args.max_lag > 0 and gen - batch_gen > args.max_lag:
+            print("skip %s: policy gen %d is %d behind" % (stem, batch_gen, gen - batch_gen))
+            processed.add(batch_key)
+            if not args.keep:
+                for pth in (binp, donep):
+                    try:
+                        os.remove(pth)
+                    except OSError:
+                        pass
+            continue
+
         t0 = time.time()
 
         obs_l, act_l, olp_l, adv_l, ret_l = [], [], [], [], []
