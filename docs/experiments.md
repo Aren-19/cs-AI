@@ -578,6 +578,49 @@ not handle a different one. Training now samples all 8 sets; evaluation uses the
 longest, which both looks like a real approach and stays deterministic. Numbers
 before and after this change are not comparable.
 
+## The 72% drop
+
+Training plateaued with mean 72.2% and best 73.0% - nearly every run ending in
+the same place. It is a drop with a hard right turn, and the bot flies straight
+past it.
+
+First reading was wrong. The human's turn rate there reaches 305 deg/s, far
+beyond what air acceleration can deliver (about 28 deg/s at 4000 u/s), so it
+looked like a ramp redirecting them. But their vertical velocity through the
+whole section changes by exactly -12 u/s per tick - clean gravity, no vertical
+clipping at all. The surface is a near-vertical wall: steep enough to redirect
+horizontal velocity hard while leaving the fall untouched.
+
+| | turn rate |
+|---|---:|
+| human, 72.5-73.3% | -180 to -305 deg/s |
+| bot, 71.3-72.2% | -95 deg/s |
+| bot, 72.4% on | -12 deg/s (no contact) |
+
+Dumping the observation through the drop showed why. The bot is hugging geometry
+at 70.3% and has separated half a second later:
+
+| progress | down | fwd-dn | back-dn | left-dn | right-dn |
+|---|---:|---:|---:|---:|---:|
+| 70.3% | 0.07 | 0.12 | 0.09 | 0.05 | 1.00 |
+| **70.8%** | **1.00** | **1.00** | **1.00** | **0.65** | **1.00** |
+| 71.3% | 0.97 | 1.00 | 1.00 | 0.57 | 1.00 |
+
+Four of five rays see nothing within 512 units; the wall it has to ride is a
+single oblique reading at ~330 units. By then it is already too late - closing
+300 units sideways needs about 0.55 s and it has 0.3 s.
+
+All five rays pointed down, which is right for a ramp underfoot and wrong for a
+wall beside you. Three level rays were added (left, right, forward) at 1024 units
+rather than 512, since 512 is under two decisions of warning at surf speed.
+
+Rays 0-4 keep their exact directions and range, and the surface normal is still
+taken from those five alone, so every pre-existing observation value is
+unchanged. The trained policy was carried across by copying its first-layer
+columns into their new positions and zeroing the three new ones - it evaluates at
+72.5% after the migration, the same as before, and can now learn to use the new
+inputs rather than starting over.
+
 ## Standing lesson
 
 Every real defect was in the agent's **interface to the game** — what

@@ -32,7 +32,7 @@ import numpy as np
 # must match csai_track.inc
 LOOK_OFFSETS   = (4, 8, 16, 32, 64, 128, 256)   # track points; 64 units apart
 LOOKAHEAD      = len(LOOK_OFFSETS)
-PROBE_RAYS     = 5
+PROBE_RAYS     = 8          # 5 down-facing, then left, right, forward
 PROBE_DIM      = PROBE_RAYS + 3
 WISH_DIM       = 0          # previous action; removed - BC latched onto it
 OBS_DIM        = 7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM

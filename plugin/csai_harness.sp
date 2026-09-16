@@ -927,6 +927,8 @@ public Action Timer_AutoRun(Handle timer)
     if (g_iEvalCL > 0)
     {
         g_bTrainQuitAfter = g_bQuitAfter;
+        if (g_iObsDumpCL > 0)
+            ServerCommand("csai_obsdump %d", g_iObsDumpCL);
         Eval_Begin(g_iEvalCL);
         return Plugin_Stop;
     }

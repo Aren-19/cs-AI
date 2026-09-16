@@ -39,7 +39,25 @@
  * O(1) instead of the far ones dominating the input scale.
  */
 #define LOOKAHEAD       7
-#define PROBE_RAYS      5        // down, fwd-down, back-down, left-down, right-down
+#define PROBE_RAYS      8        // 5 down-facing, then left, right, forward
+/**
+ * Rays 0-4 look down, for the ramp underneath - which is the whole story in
+ * ordinary surfing. Rays 5-7 look sideways and ahead, and exist because of the
+ * drop at 72% of surf_demise: the surface there is a near-vertical wall beside
+ * the bot rather than a ramp below it.
+ *
+ * Measured going into that drop: at 70.3% four rays were touching geometry
+ * (0.05-0.12 of range), and half a second later four of the five read 1.00 -
+ * nothing within 512 units - leaving one oblique ray at ~330 units as the only
+ * description of the wall it had to ride.
+ *
+ * The new rays reach 1024 rather than 512, because 512 units is under two
+ * decisions of warning at 4000 u/s. Rays 0-4 keep their old range and directions
+ * exactly, and the surface normal is still taken from them alone, so every
+ * observation value that existed before is unchanged and a trained policy can be
+ * carried straight over.
+ */
+#define PROBE_DOWN_RAYS 5
 #define PROBE_DIM       (PROBE_RAYS + 3)
 // +2 for sin/cos of the currently held wish angle. With delta actions the
 // absolute angle is internal state; if the policy cannot see it, it is acting
@@ -338,14 +356,21 @@ stock void Track_BuildProbe(int client, const float pos[3], const float vel[3], 
 	dirs[2][0] = -0.7; dirs[2][1] =  0.0; dirs[2][2] = -0.7;   // back-down
 	dirs[3][0] =  0.0; dirs[3][1] =  0.7; dirs[3][2] = -0.7;   // left-down
 	dirs[4][0] =  0.0; dirs[4][1] = -0.7; dirs[4][2] = -0.7;   // right-down
+	dirs[5][0] =  0.0; dirs[5][1] =  1.0; dirs[5][2] =  0.0;   // left, level
+	dirs[6][0] =  0.0; dirs[6][1] = -1.0; dirs[6][2] =  0.0;   // right, level
+	dirs[7][0] =  1.0; dirs[7][1] =  0.0; dirs[7][2] =  0.0;   // straight ahead
 
-	float maxDist = 512.0;
 	float bestFrac = 2.0;
 	float bestNormal[3];
 	bestNormal[0] = 0.0; bestNormal[1] = 0.0; bestNormal[2] = 0.0;
 
 	for (int i = 0; i < PROBE_RAYS; i++)
 	{
+		// The level rays reach further: 512 units is under two decisions of
+		// warning at surf speed, and these are the ones meant to see a drop
+		// coming rather than the ramp already underfoot.
+		float maxDist = (i < PROBE_DOWN_RAYS) ? 512.0 : 1024.0;
+
 		// rotate the velocity-frame direction into world space
 		float wx = cy * dirs[i][0] - sy * dirs[i][1];
 		float wy = sy * dirs[i][0] + cy * dirs[i][1];
@@ -367,7 +392,9 @@ stock void Track_BuildProbe(int client, const float pos[3], const float vel[3], 
 			float dx = hit[0] - start[0], dy = hit[1] - start[1], dz = hit[2] - start[2];
 			frac = SquareRoot(dx * dx + dy * dy + dz * dz) / maxDist;
 
-			if (frac < bestFrac)
+			// Normal still comes from the down-facing rays only, so this value
+			// keeps the exact meaning it had before the level rays were added.
+			if (i < PROBE_DOWN_RAYS && frac < bestFrac)
 			{
 				bestFrac = frac;
 				TR_GetPlaneNormal(tr, bestNormal);
