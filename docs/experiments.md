@@ -353,6 +353,87 @@ it jitter (8.35/s). The goal is a policy confident enough that its mode is its
 behaviour - so greedy and sampled agree - which is what the switch cost and the
 anchor are for.
 
+## Throughput
+
+One srcds instance is single-threaded and saturates around 4500 ticks/s. Parallel
+instances are the only way past it.
+
+| actors | steps/s | gen/min | scaling |
+|---:|---:|---:|---:|
+| 1 | 2245 | 2.4 | - |
+| 4 | 8739 | 8.6 | 3.89x (97%) |
+| 6 | 12005 | 11.8 | 5.35x (89%) |
+
+Needed four fixes: per-actor batch filenames (every actor wrote batch_0000 over
+the others), separate UDP ports, per-actor orphan cleanup (a restarting actor
+deleted its siblings' in-progress batches), and oldest-first batch selection in
+the learner - the old name-ordered pick always preferred actor 0 and let the rest
+go stale. Off-policy lag costs nothing measurable: KL stays at 0.004-0.006.
+
+## Frameskip 6
+
+Reasoning: gamma 0.997 at frameskip 2 gives a 10 s horizon against 27 s episodes,
+so the value function could not see the last two thirds of a run.
+
+It did not improve progress. 180 generations settled at 40% mean against the 46%
+baseline. It did improve technique sharply:
+
+| | fs 2 | fs 6 | human |
+|---|---:|---:|---:|
+| strafe switches/s | 8.35 | 4.31 | 0.95 |
+| p95 abs dyaw | 35.24 deg | 3.48 deg | 2.24 deg |
+| phi in window | 94.9% | 97.6% | 98.1% |
+| median speed | 3298 | 3276 | 3614 |
+
+Kept, because the wall turned out to be elsewhere and the technique gain is real.
+
+## The 60% wall was a reward cliff
+
+Best progress sat at 60-63% through every hyperparameter change. Five of six eval
+runs ended at 59-60% of the map, all within a unit or two of **600** - the
+deviation limit. They were not falling. They were being ruled out of bounds.
+
+The reward was `dS/100` and nothing else, so drifting 590 units off the route
+cost exactly zero and then at 600 the episode died with no warning. A cliff with
+no slope leading to it cannot be learned from.
+
+Control run first, this time: the human's own deviation from the centerline built
+from that run is 0 for the entire route, exceeding 600 only after the finish. So
+the limit was not killing legitimate play.
+
+Added `cost * (dist/maxDeviation)^2` per decision, quadratic so ordinary wobble
+is nearly free (`+csai_devcost`, default 0.5):
+
+| | mean | best |
+|---|---:|---:|
+| fs 6, no deviation cost | 40% | 61% |
+| fs 6 + deviation cost | **49.7%** | 63.4% |
+
+Better than the frameskip-2 baseline of 46% as well. Max deviation across a run
+dropped from ~607 to ~278.
+
+## What is left: one missed input at 59%
+
+The wall did not move much, and the reason is specific.
+
+| | human | bot |
+|---|---|---|
+| switches to D at | **59.0%** | **60.5%** |
+| z, 57% -> 60% | 4701 -> 4204 | 4677 -> 3661 |
+| speed through the section | 3810 | 3220 |
+
+The bot matches the human's height within +-80 units for the first 57% of the
+map. Then it holds A about 0.7 s too long through the transition at 59%, sinks
+twice as fast as the human, and leaves the corridor.
+
+It is also entering that section ~590 u/s slower, which is the likelier root
+cause: the same line may simply not be holdable at 3220.
+
+Not a tuning problem, and not a sampling problem either - at 12000 steps/s the
+bot attempts this transition thousands of times per minute. The two candidates
+are more human runs covering it, and letting episodes start near it so the
+payoff is not 40 s of successful surfing away.
+
 ## Standing lesson
 
 Every real defect was in the agent's **interface to the game** — what

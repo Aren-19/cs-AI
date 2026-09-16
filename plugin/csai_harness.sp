@@ -217,6 +217,7 @@ void ArmBenchmark()
     g_bEvalGreedy     = (GetCommandLineParamInt("+csai_evalgreedy", 1) != 0);
     g_iActorId        = GetCommandLineParamInt("+csai_actor", 0);
     g_fSwitchCost     = GetCommandLineParamFloat("+csai_switchcost", g_fSwitchCost);
+    g_fDeviationCost  = GetCommandLineParamFloat("+csai_devcost", g_fDeviationCost);
     int seed          = GetCommandLineParamInt("+csai_seed", 0);
     if (seed != 0)
         Pol_Seed(seed);
@@ -974,6 +975,7 @@ public Action Cmd_Cfg(int args)
     if      (StrEqual(key, "batch"))      g_iBatchTarget  = StringToInt(val);
     else if (StrEqual(key, "frameskip"))  g_iFrameSkip    = (StringToInt(val) < 1) ? 1 : StringToInt(val);
     else if (StrEqual(key, "deviation"))  g_fMaxDeviation = StringToFloat(val);
+    else if (StrEqual(key, "devcost"))    g_fDeviationCost = StringToFloat(val);
     else if (StrEqual(key, "switchcost")) g_fSwitchCost = StringToFloat(val);
     else if (StrEqual(key, "states"))     g_iTrainStates  = StringToInt(val);
     else if (StrEqual(key, "budget"))     g_iEpTickBudget = StringToInt(val);

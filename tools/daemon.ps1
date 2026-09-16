@@ -22,6 +22,7 @@ param(
     [string]$Power = '',
     [int]$Actors    = 0,           # parallel srcds actors; 0 = auto from core count
     [int]$FrameSkip = 2,           # ticks per decision
+    [double]$DevCost = 0.5,        # penalty for drifting off the reference line
     [double]$Gamma  = 0.997,       # discount; horizon is FrameSkip/(1-Gamma) ticks
     [int]$EvalEvery = 40,          # generations between automatic evaluations
     [int]$ReportEvery = 300,       # seconds between report snapshots
@@ -128,7 +129,7 @@ function Start-Actor([string]$level, [int]$id = 0) {
         # checkpoints instead (segmented practice) - easier exploration, but it
         # optimises "advance from anywhere" rather than "complete the map".
         '+csai_states', '1', '+csai_budget', '6000', '+csai_deviation', '600',
-        '+csai_prestrafe', '1', '+csai_switchcost', '0.15',
+        '+csai_prestrafe', '1', '+csai_switchcost', '0.15', '+csai_devcost', $DevCost,
         '+csai_bench_timescale', $cfg.Timescale,
         '+csai_bench_quit', '0', '+csai_bench_delay', '8'
     )

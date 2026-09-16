@@ -50,6 +50,25 @@ bool  g_bEvalGreedy    = true;
 bool  g_bScripted      = false;   // hand-coded controller, for interface testing
 int   g_iFrameSkip     = 2;
 float g_fMaxDeviation  = 600.0;    // units off the centerline before we call it a fall
+
+/**
+ * Price on being off the reference line, charged every decision as
+ * cost * (dist/maxDeviation)^2.
+ *
+ * Without it, progress reward is the only signal and drifting 590 units off the
+ * route costs exactly nothing - then at 600 the episode dies with no warning.
+ * A cliff with no slope leading to it cannot be learned from.
+ *
+ * Measured at the wall this was blocking: through 50-70% of surf_demise the
+ * human holds 0 deviation, while the bot wobbles 300-400 off the line and sinks
+ * steadily below it (z 4384 against the human's 4630 at 58%, 3626 against 4204
+ * at 60%) until it slides off the bottom of the ramp. Every recent run ended
+ * within a unit or two of the 600 limit, at 59-60% of the map.
+ *
+ * Quadratic so that small, normal wobble is nearly free and only real drift
+ * bites.
+ */
+float g_fDeviationCost = 0.5;
 int   g_iEpTickBudget  = 4000;
 int   g_iTrainStates   = 0;        // 0 = sample from all loaded states
 
@@ -516,6 +535,13 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	float dS = s - g_fEpLastS;
 	g_fEpLastS = s;
 	g_fEpStepReward += dS / 100.0;
+
+	if (g_fDeviationCost > 0.0 && g_fMaxDeviation > 0.0)
+	{
+		float off = dist / g_fMaxDeviation;
+		if (off > 1.0) off = 1.0;
+		g_fEpStepReward -= g_fDeviationCost * off * off;
+	}
 
 	Ep_ApplyAction(vel, buttons, movement, angles);
 
