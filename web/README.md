@@ -20,8 +20,8 @@ Two upstream repos, cloned and pointed at local data:
 
 | | |
 |---|---|
-| `offstyles-web/` | the Vue site (records list, record page) |
-| `replay-viewer/` | the viewer component — a vendored WebGL2 port of [noclip.website](https://github.com/magcius/noclip.website)'s Source engine renderer, plus a Rust→WASM replay parser |
+| [`offstyles-web/`](https://github.com/offstyles/offstyles-web) | the Vue site (records list, record page) |
+| [`replay-viewer/`](https://github.com/offstyles/replay-viewer) | the viewer component — a vendored WebGL2 port of [noclip.website](https://github.com/magcius/noclip.website)'s Source engine renderer, plus a Rust→WASM replay parser |
 
 Neither ships a backend. Upstream's Vite config proxies `/api` to the live
 offstyles.net, whose API is closed and only knows *their* replays — our bot's runs

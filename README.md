@@ -102,6 +102,28 @@ See [HOWTO.md](HOWTO.md) for how to add them.
 `docs/experiments.md` is a running log of every change and whether it helped,
 including the ones that did not.
 
+## Credit for the viewer
+
+The 3D replay viewer is not mine. It is built on two repos by offstyles, the
+people behind offstyles.net:
+
+- [offstyles/offstyles-web](https://github.com/offstyles/offstyles-web) - the site itself
+- [offstyles/replay-viewer](https://github.com/offstyles/replay-viewer) - the in-browser map and replay renderer
+
+Neither is included here. `web/run.ps1` fetches them when you first run the
+viewer, and the only changes made are small ones to point them at your own files
+instead of the live site. Those changes are listed in [web/README.md](web/README.md).
+
+The renderer inside replay-viewer is a port of
+[noclip.website](https://github.com/magcius/noclip.website), which is MIT
+licensed.
+
+One thing to be aware of: neither offstyles repo has a licence file, so by
+default the authors keep all rights. Running a copy locally for yourself is
+normal. Putting a copy online is not something to do without asking them first.
+The map and texture files it loads are Valve's and come from your own game
+install, which is another reason this stays a local tool.
+
 ## What you need
 
 - Counter-Strike: Source, with a working local server
