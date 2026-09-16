@@ -39,8 +39,39 @@
  * acceleration at all, so you stop pushing yourself off the surface you are
  * riding.
  */
-#define POL_COAST    16      // press nothing this decision
-#define POL_ACTIONS  17      // 2 sides x 8 trims, then coast
+/**
+ * Trim, in degrees added to 90, giving the wish angle phi.
+ *
+ * Source applies air acceleration of `addspeed = 30 - speed*cos(phi)` per tick,
+ * capped by sv_airaccelerate*wishspeed*frametime (1012 here, never the limit).
+ * cos(phi) turns negative past 90 degrees, so addspeed GROWS with phi and the
+ * achievable turn rate grows with it. At 4147 u/s:
+ *
+ *      phi 89.75 ->  11 deg/s      phi 92 -> 161 deg/s
+ *      phi 91    ->  94 deg/s      phi 95 -> 361 deg/s
+ *
+ * The first two are exactly the rates measured on the bot going into the drop at
+ * 72%, where it turns at 94 deg/s and then settles on a trim that can only
+ * manage 11 - it looks like it stops steering because, at that angle and that
+ * speed, it almost has. The corner needs about 300 deg/s.
+ *
+ * Turning harder and losing speed are therefore the same act, and the useful
+ * amount is small. Measured from a checkpoint at the drop, forcing one trim for
+ * the whole episode:
+ *
+ *      phi 90.0 -> 1.1%      phi 95  -> 0.7%
+ *      phi 90.5 -> 1.3%      phi 100 -> 0.4%
+ *      phi 91.0 -> 1.6%      phi 110 -> 0.3%
+ *      phi 92.0 -> 3.8%   <- clears the drop
+ *
+ * and from the checkpoint before it, where the same phi 92 scores 0.9% against
+ * phi 90's 2.8%. So the right angle is sharply state-dependent, and trims past 2
+ * were tried and are strictly worse everywhere - they brake far too hard. The
+ * table stays at 2 degrees; the problem was never that this action was missing.
+ */
+#define POL_TRIMS  8
+#define POL_COAST    (2 * POL_TRIMS)       // press nothing this decision
+#define POL_ACTIONS  (2 * POL_TRIMS + 1)   // 2 sides x trims, then coast
 
 #define POL_W1_N  (OBS_DIM * POL_H1)
 #define POL_W2_N  (POL_H1 * POL_H2)
@@ -269,7 +300,6 @@ stock int Pol_Act(const float obs[OBS_DIM], float &outLogp, bool greedy)
  * coherence by construction, which the absolute parameterisation could not
  * express and the delta ladder only approximated.
  */
-#define POL_TRIMS  8
 
 stock float Pol_TrimValue(int i)
 {

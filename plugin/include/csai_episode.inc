@@ -134,6 +134,23 @@ int   g_iEpOutcome     = EP_RUNNING;
 int   g_iEpTick        = 0;
 int   g_iEpSteps       = 0;
 bool  g_bEpCoast       = false;   // this decision presses no strafe key
+
+/**
+ * Override the policy's strafe side, for diagnosis only.
+ *
+ * +1 = always A (accelerate to the left of velocity), -1 = always D, 0 = off.
+ * Exists to answer whether a section is passable at all with a given side, when
+ * the policy has collapsed onto one choice and will never sample the other.
+ */
+/**
+ * 0 = off, 1 = force the A side, 2 = force the D side.
+ *
+ * Not +1/-1: the command-line parser does not accept a negative value, so
+ * "+csai_forceside -1" silently arrived as 0 and every forced-D measurement was
+ * really the unforced policy.
+ */
+int   g_iForceSide     = 0;
+int   g_iForceTrim     = -1;   // >=0 pins the trim too, for diagnosis
 int   g_iEpStartState  = 0;
 float g_fEpStartS      = 0.0;
 float g_fEpLastS       = 0.0;
@@ -627,6 +644,12 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			int prevSide = g_iEpSide;
 			g_bEpCoast = (g_iEpAction == POL_COAST);
 			Pol_ApplyAction(g_iEpAction, g_iEpSide, g_iEpTrim);
+			if (g_iForceSide != 0)
+			{
+				g_iEpSide  = (g_iForceSide == 1) ? 1 : -1;
+				g_iEpTrim  = (g_iForceTrim >= 0) ? g_iForceTrim : 0;
+				g_bEpCoast = false;
+			}
 			g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
 			if (g_iEpSide != prevSide)
 				g_fEpStepReward -= g_fSwitchCost;

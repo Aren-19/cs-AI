@@ -27,6 +27,7 @@ param(
     # rate on a restart; nothing looked wrong because eval defaulted the same way.
     [int]$FrameSkip = 2,           # ticks per decision
     [double]$DevCost = 0.5,        # penalty for drifting off the reference line
+    [double]$Entropy = 0.02,       # exploration pressure; 0.003 let the policy saturate
     [double]$StateMix = 0.3,       # share of episodes starting mid-map
     [double]$StateLo = 0.68,       # window for those, as a fraction of the reference run's time
     [double]$StateHi = 0.79,
@@ -112,8 +113,12 @@ function Get-Gen {
 }
 
 function Start-Learner {
+    # Entropy raised from 0.003 after the policy was measured to have collapsed at
+    # the 72% drop: 100% of decisions on one side with p(everything else) ~ 0.001.
+    # A saturated policy cannot discover the action that works there - forcing
+    # phi 92 clears the drop, and it had essentially zero chance of sampling it.
     $args = @((Join-Path $Root 'tools\learn.py'), '--batches', '1000000', '--timeout', '900',
-              '--gamma', $Gamma)
+              '--gamma', $Gamma, '--ent', $Entropy)
     if (Test-Path (Join-Path $Root 'data\ckpt.npz')) { $args += '--resume' }
     Start-Process -FilePath 'python' -ArgumentList $args `
         -WorkingDirectory (Join-Path $Root 'tools') -WindowStyle Hidden | Out-Null

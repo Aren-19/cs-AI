@@ -686,6 +686,72 @@ A policy is not portable across decision rates, and a default that silently
 disagrees with the checkpoint is a trap. The default is now pinned to the
 checkpoint's rate with that written next to it.
 
+## The 72% drop: solved as a diagnosis
+
+The user's observation was that the bot "slightly looks down and stops steering"
+and dives, at an identical point every time. That turned out to be literally
+true, and measurable.
+
+### Turning and losing speed are the same act
+
+Source applies `addspeed = 30 - speed*cos(phi)` per tick, capped by
+`sv_airaccelerate * wishspeed * frametime` (1012 here, never the binding limit).
+Past 90 degrees `cos(phi)` is negative, so `addspeed` GROWS with phi - and the
+same acceleration has a negative component along velocity. Turn rate at 4147 u/s:
+
+| phi | turn rate |
+|---:|---:|
+| 89.75 | 11 deg/s |
+| 91 | 94 deg/s |
+| 92 | 161 deg/s |
+
+The bot going into the drop turns at 94 deg/s, then settles on a trim that can
+only manage 11. At that angle and that speed it has, almost exactly, stopped
+steering. (An earlier note here claimed the 94 deg/s came from wall contact. It
+does not - it is plain air acceleration at phi 91.)
+
+### What actually works
+
+Forcing a single trim for a whole episode, starting from the checkpoint at the
+drop (71.7%), and from the one before it (66.5%):
+
+| phi | from 71.7% | from 66.5% |
+|---:|---:|---:|
+| 90.0 | 1.1% | **2.8%** |
+| 90.5 | 1.3% | - |
+| 91.0 | 1.6% | - |
+| **92.0** | **3.8%** | 0.9% |
+| 95 | 0.7% | - |
+| 100 | 0.4% | - |
+| 110 | 0.3% | - |
+
+phi 92 clears the drop, reaching 75.5% where the policy reaches 72.8%. The same
+phi 92 is bad on the approach. So the correct angle is sharply state-dependent,
+the useful amount of braking is small, and heavy braking is worse than none.
+
+Trims of 5, 10 and 20 degrees were added on the theory that the bot could not
+turn hard enough, then measured, found strictly worse, and reverted. The action
+that works - trim 7, phi 92 - had been in the action space the whole time.
+
+### The real cause: the policy had collapsed
+
+At the drop the policy chose the D side on **100% of decisions across 40
+episodes**, with p(coast) = 0.001 and effectively zero mass anywhere else. A
+saturated policy cannot discover phi 92 by sampling, and the mixed starts
+therefore could not help however many attempts they provided. Entropy raised from
+0.003 to 0.02.
+
+### Two diagnostic bugs found on the way
+
+`+csai_forceside -1` parsed as 0, because the command-line reader does not take
+negative values. Every "forced D side" measurement was silently the unforced
+policy, which is why a sweep of five very different trims returned identical
+results - the tell that something was not connected. The encoding is now 1 = A,
+2 = D.
+
+The lesson repeats from earlier today: when a deliberately varied input produces
+identical output, suspect the wiring before the physics.
+
 ## Standing lesson
 
 Every real defect was in the agent's **interface to the game** — what

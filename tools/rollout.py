@@ -38,7 +38,7 @@ WISH_DIM       = 0          # previous action; removed - BC latched onto it
 OBS_DIM        = 7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM
 
 # must match csai_policy.inc
-N_ACTIONS = 17   # 2 sides x 8 trims, plus coast (press nothing)
+N_ACTIONS = 17   # 2 sides x 8 trims, plus coast
 
 EP_FELL, EP_FINISHED, EP_TIMEOUT, EP_STUCK = 1, 2, 3, 4
 OUTCOME_NAMES = {1: "fell", 2: "finished", 3: "timeout", 4: "stuck"}
