@@ -184,8 +184,10 @@ public void OnMapStart()
 
     LoadStates();
     Track_Load();
-    Pre_Load();
+    Pre_Load();          // single-file fallback, if no recordings exist
     Demo_Load();
+    Pre_BuildFromDemos();   // prefer the recorded prestrafes
+    Demo_LoadIndex(0);      // leave run 0 loaded for demo capture
     ArmBenchmark();
 }
 

@@ -25,6 +25,28 @@
 #define _csai_prestrafe_included
 
 #define PRE_MAX_TICKS 512
+#define PRE_MAX_SETS   16
+
+/**
+ * Several recorded prestrafes, one picked per episode.
+ *
+ * The single replayed prestrafe was 67 ticks against the human's real 63-113, so
+ * it looked clipped - the bot appeared at the start line already moving instead
+ * of winding up. Every recorded run carries its own prestrafe, so they are all
+ * kept and sampled.
+ *
+ * Variety here is worth more than looks. Each one hands over at a slightly
+ * different position, speed and angle (282-286 u/s across the set), so the
+ * policy stops seeing one fixed opening state and has to handle a spread of
+ * them - the same reason a fixed start makes a brittle policy.
+ */
+float g_fPreAngSet[PRE_MAX_SETS][PRE_MAX_TICKS][2];
+int   g_iPreBtnSet[PRE_MAX_SETS][PRE_MAX_TICKS];
+float g_fPreStartSet[PRE_MAX_SETS][3];
+float g_fPreStartAngSet[PRE_MAX_SETS][3];
+int   g_iPreCountSet[PRE_MAX_SETS];
+int   g_iPreSets = 0;
+int   g_iPreLongest = 0;   // the fullest wind-up, used for evaluation replays
 
 float g_fPreAng[PRE_MAX_TICKS][2];
 int   g_iPreButtons[PRE_MAX_TICKS];
@@ -92,8 +114,38 @@ stock void Pre_Load()
 }
 
 /** Put the bot at the recorded start, stationary, ready to replay. */
+/** Load one of the recorded prestrafes into the active slot. */
+stock void Pre_Select(int which)
+{
+	if (g_iPreSets <= 0)
+		return;
+	if (which < 0) which = 0;
+	if (which >= g_iPreSets) which = g_iPreSets - 1;
+
+	g_iPreCount = g_iPreCountSet[which];
+	for (int i = 0; i < g_iPreCount; i++)
+	{
+		g_fPreAng[i][0]  = g_fPreAngSet[which][i][0];
+		g_fPreAng[i][1]  = g_fPreAngSet[which][i][1];
+		g_iPreButtons[i] = g_iPreBtnSet[which][i];
+	}
+	g_fPreStart[0] = g_fPreStartSet[which][0];
+	g_fPreStart[1] = g_fPreStartSet[which][1];
+	g_fPreStart[2] = g_fPreStartSet[which][2];
+	g_fPreStartAng[0] = g_fPreStartAngSet[which][0];
+	g_fPreStartAng[1] = g_fPreStartAngSet[which][1];
+	g_fPreStartAng[2] = 0.0;
+}
+
 stock bool Pre_Begin(int client)
 {
+	// Evaluation takes the longest recorded wind-up: deterministic, so runs stay
+	// comparable, and it is the one that looks like a real approach rather than
+	// the bot appearing at the line already moving. Training samples all of them
+	// so the policy sees a spread of opening states.
+	if (g_iPreSets > 0)
+		Pre_Select(g_bEval ? g_iPreLongest : RoundToFloor(Pol_Rand() * float(g_iPreSets)));
+
 	if (!g_bPrestrafeEnabled || g_iPreCount == 0 || client == -1 || !IsClientInGame(client))
 		return false;
 

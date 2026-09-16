@@ -91,6 +91,52 @@ stock int Demo_CountFiles()
 	return n;
 }
 
+/**
+ * Drop everything up to and including the last teleport in the prestrafe.
+ *
+ * A recording's rolling buffer starts before the player respawned, so it can
+ * open wherever the previous attempt ended - mid-map, or past the finish - and
+ * then jump thousands of units back to the start. Demo_Begin teleports the bot
+ * to tick 0 and replays from there, so without this the bot begins the run in
+ * completely the wrong place and every observation captured afterwards is paired
+ * with a human action taken somewhere else entirely.
+ *
+ * Measured on the first batch of recordings: jumps of 18933 and 21772 units
+ * inside the prestrafe. The clone trained on that data scored 1.1% against a
+ * clean single run's 6.8%, which looked like an argument against using several
+ * runs and was in fact this bug.
+ */
+stock void Demo_TrimTeleports()
+{
+	int cut = -1;
+	int limit = (g_iDemoPre > 0 && g_iDemoPre < g_iDemoCount) ? g_iDemoPre : g_iDemoCount;
+	for (int i = 1; i < limit; i++)
+	{
+		float dx = g_fDemoPos[i][0] - g_fDemoPos[i - 1][0];
+		float dy = g_fDemoPos[i][1] - g_fDemoPos[i - 1][1];
+		float dz = g_fDemoPos[i][2] - g_fDemoPos[i - 1][2];
+		if (SquareRoot(dx * dx + dy * dy + dz * dz) > 200.0)
+			cut = i;
+	}
+	if (cut < 0)
+		return;
+
+	for (int i = cut; i < g_iDemoCount; i++)
+	{
+		int d = i - cut;
+		g_fDemoPos[d][0] = g_fDemoPos[i][0];
+		g_fDemoPos[d][1] = g_fDemoPos[i][1];
+		g_fDemoPos[d][2] = g_fDemoPos[i][2];
+		g_fDemoAng[d][0] = g_fDemoAng[i][0];
+		g_fDemoAng[d][1] = g_fDemoAng[i][1];
+		g_iDemoButtons[d] = g_iDemoButtons[i];
+	}
+	g_iDemoCount -= cut;
+	g_iDemoPre = (g_iDemoPre > cut) ? (g_iDemoPre - cut) : 0;
+	PrintToServer("[CsAI] demo: dropped %d ticks before a teleport (%d left, %d prestrafe)",
+	              cut, g_iDemoCount, g_iDemoPre);
+}
+
 /** Load one run into the tick arrays, replacing whatever was there. */
 stock bool Demo_LoadIndex(int which)
 {
@@ -148,8 +194,63 @@ stock bool Demo_LoadIndex(int which)
 	}
 	delete f;
 
+	Demo_TrimTeleports();
 	g_iDemoFileIdx = which;
 	return g_iDemoCount > 0;
+}
+
+/**
+ * Fill the prestrafe sets from every recorded run.
+ *
+ * Reuses the demo loader so the teleport trimming applies here too - without it
+ * a prestrafe would begin wherever the previous attempt ended.
+ */
+stock void Pre_BuildFromDemos()
+{
+	g_iPreSets = 0;
+	int files = Demo_CountFiles();
+
+	for (int i = 0; i < files && g_iPreSets < PRE_MAX_SETS; i++)
+	{
+		if (!Demo_LoadIndex(i))
+			continue;
+		int n = g_iDemoPre;
+		if (n < 16 || n > PRE_MAX_TICKS)
+			continue;
+
+		int k = g_iPreSets;
+		for (int t = 0; t < n; t++)
+		{
+			g_fPreAngSet[k][t][0] = g_fDemoAng[t][0];
+			g_fPreAngSet[k][t][1] = g_fDemoAng[t][1];
+			g_iPreBtnSet[k][t]    = g_iDemoButtons[t];
+		}
+		g_fPreStartSet[k][0] = g_fDemoPos[0][0];
+		g_fPreStartSet[k][1] = g_fDemoPos[0][1];
+		g_fPreStartSet[k][2] = g_fDemoPos[0][2];
+		g_fPreStartAngSet[k][0] = g_fDemoAng[0][0];
+		g_fPreStartAngSet[k][1] = g_fDemoAng[0][1];
+		g_fPreStartAngSet[k][2] = 0.0;
+		g_iPreCountSet[k] = n;
+		g_iPreSets++;
+	}
+
+	if (g_iPreSets > 0)
+	{
+		int shortest = g_iPreCountSet[0];
+		g_iPreLongest = 0;
+		for (int i = 1; i < g_iPreSets; i++)
+		{
+			if (g_iPreCountSet[i] > g_iPreCountSet[g_iPreLongest])
+				g_iPreLongest = i;
+			if (g_iPreCountSet[i] < shortest)
+				shortest = g_iPreCountSet[i];
+		}
+		Pre_Select(g_iPreLongest);
+		PrintToServer("[CsAI] prestrafe: %d recorded set(s), %d..%d ticks (eval uses %d)",
+		              g_iPreSets, shortest, g_iPreCountSet[g_iPreLongest],
+		              g_iPreCountSet[g_iPreLongest]);
+	}
 }
 
 stock void Demo_Load()

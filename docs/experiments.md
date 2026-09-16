@@ -533,6 +533,51 @@ first-order lag of 0.05 with a 0.30 deg/tick cap was fitted to reproduce that.
 Greedy evaluation reaches 72.6% at generation 1143, against 6.0% at generation
 143.
 
+## Prestrafe
+
+The replayed prestrafe was 67 ticks against the human's real 63-113, so the bot
+appeared at the start line already moving instead of winding up.
+
+Two bugs surfaced on the way to fixing that.
+
+### Teleports inside the recordings
+
+The recorder keeps a rolling buffer before the timer starts, so it captures the
+player respawning - a jump of up to 21772 units in one tick, from wherever the
+previous attempt ended. `Demo_Begin` teleports the bot to tick 0 and replays from
+there, so those runs began in the middle of the map and every captured
+observation was paired with a human action taken somewhere else.
+
+This is what produced the earlier result that cloning 8 runs (1.1%) was far worse
+than cloning 1 (6.8%), read at the time as mode averaging. The data was simply
+corrupt. Both the recorder and the loader now cut everything before the last
+teleport.
+
+With clean data the offline numbers improve a lot:
+
+| trained on | side acc across all runs | switches/s |
+|---|---:|---:|
+| run 1, corrupt capture | 0.621 | 0.18 |
+| run 1, clean | 0.671 | 0.67 |
+| all 8, corrupt capture | 0.800 | 1.26 |
+| **all 8, clean** | **0.867** | **1.14** |
+| human | - | 1.10 |
+
+Closed loop it is still only 2.3% against the single run's 6.8%, so the original
+conclusion survives in weaker form: cloning is a poor policy here either way, and
+the trained policy at 72.6% is what matters. But the stated reason was wrong.
+
+### The policy is brittle to its opening state
+
+Every recorded run carries its own prestrafe, so all of them are now kept and one
+is sampled per episode. Switching evaluation from the 67-tick prestrafe to the
+113-tick one, changing nothing else, took the same policy from **72.4% to 11.3%**.
+
+It had only ever started from one handover position, speed and angle, and could
+not handle a different one. Training now samples all 8 sets; evaluation uses the
+longest, which both looks like a real approach and stays deterministic. Numbers
+before and after this change are not comparable.
+
 ## Standing lesson
 
 Every real defect was in the agent's **interface to the game** — what

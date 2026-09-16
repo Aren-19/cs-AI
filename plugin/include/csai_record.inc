@@ -116,6 +116,19 @@ stock void Rec_Human_Tick(int client, int buttons, const float angles[3])
 	float pos[3];
 	GetClientAbsOrigin(client, pos);
 
+	// A respawn or a timer restart moves the player thousands of units in one
+	// tick. Everything buffered before that belongs to the previous attempt, and
+	// replaying it would start the run in the wrong place entirely.
+	if (g_iRecHumanCount > 0)
+	{
+		int last = g_iRecHumanCount - 1;
+		float dx = pos[0] - g_fRecHumanPos[last][0];
+		float dy = pos[1] - g_fRecHumanPos[last][1];
+		float dz = pos[2] - g_fRecHumanPos[last][2];
+		if (SquareRoot(dx * dx + dy * dy + dz * dz) > 200.0)
+			Rec_Human_Reset();
+	}
+
 	int i = g_iRecHumanCount;
 	g_fRecHumanPos[i][0] = pos[0];
 	g_fRecHumanPos[i][1] = pos[1];
