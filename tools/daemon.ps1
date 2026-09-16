@@ -21,6 +21,10 @@ param(
     [ValidateSet('idle', 'low', 'medium', 'high', 'max')]
     [string]$Power = '',
     [int]$Actors    = 0,           # parallel srcds actors; 0 = auto from core count
+    # Must match what the CHECKPOINT was trained with - a policy is not portable
+    # across decision rates. The current one measures 73% at 2 and 8.5% at 6.
+    # This defaulted to 2 while training ran at 6 once and silently reverted the
+    # rate on a restart; nothing looked wrong because eval defaulted the same way.
     [int]$FrameSkip = 2,           # ticks per decision
     [double]$DevCost = 0.5,        # penalty for drifting off the reference line
     [double]$StateMix = 0.3,       # share of episodes starting mid-map

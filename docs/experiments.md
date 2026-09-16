@@ -621,6 +621,71 @@ columns into their new positions and zeroing the three new ones - it evaluates a
 72.5% after the migration, the same as before, and can now learn to use the new
 inputs rather than starting over.
 
+## The 72% drop, continued
+
+### Mixed starts ruled exploration out
+
+30% of episodes were started from replay checkpoints at 61.3%, 66.5% and 71.7%
+of the track - the last sitting right at the drop - so the bot entered it
+repeatedly from varied approaches instead of once per full run.
+
+It made no difference. Every episode still ended there, including the ~20 per
+batch that began at 71.7% carrying the human's own recorded velocity. Mid-map
+episodes gained essentially nothing. So the bot is not failing for want of
+practice or of a lucky success to reinforce; it cannot clear the drop even when
+handed the state the human clears it from.
+
+Two bugs found while establishing that, both mine:
+
+- The setting was not reaching the running actors at all, and the plateau was
+  being watched as if it were under treatment. A `mid N` counter in the batch
+  line settled it in one look. Instrument the thing you are changing.
+- The learner had a 75-batch backlog, oldest 45 minutes stale, and consumes
+  oldest-first - so it was training on pre-change data while the actors produced
+  post-change data, and the two disagreed by 25 points of progress. With sync on,
+  one consumed batch unblocks every actor at once, so the queue grows
+  structurally. The learner now drops anything more than `--max-lag` generations
+  behind, which PPO needed anyway: its trust region is meaningless on data that
+  far off-policy.
+
+### Not the deviation limit either
+
+The obvious next suspect, since the corridor is measured against the human's line
+through a 305 deg/s turn. Raising the limit from 600 to 1500 moved best progress
+from 73.0% to 73.2%. It is genuinely falling, not being ruled out of bounds.
+
+### What the action space cannot do
+
+The bot must press a strafe key on every decision, at phi ~ +-90. It has no way
+to press nothing. Across the 8 recorded runs the human does exactly that far more
+at this spot than anywhere else:
+
+| | one key | no strafe key | both |
+|---|---:|---:|---:|
+| whole run | 92.8% | 5.6% | 1.5% |
+| 68-76% (the drop) | 86.5% | **12.2%** | 1.3% |
+
+With no strafe key there is no wish direction and no air acceleration at all -
+you coast, and stop pushing yourself off the surface you are riding. Forced to
+accelerate every tick, the bot cannot hold a delicate contact.
+
+Added action 16, POL_COAST: presses nothing, keeps the held side so resuming does
+not register as a strafe switch. The trained policy was carried over by copying
+the 16 existing head rows and giving the new one zero weights and a -0.5 bias, so
+it starts at about 3.7% and PPO can find it rather than being forced into it.
+
+### A configuration slip worth recording
+
+Training silently reverted from frameskip 6 to 2 on a restart, because the
+daemon's `-FrameSkip` default was 2 and the restart did not pass it. Nothing
+looked wrong: evaluation defaulted the same way, so actor and eval agreed with
+each other and reported a plausible 73%. It surfaced only when a manual eval at
+frameskip 6 returned 8.5% for a policy that measures 73% at 2.
+
+A policy is not portable across decision rates, and a default that silently
+disagrees with the checkpoint is a trap. The default is now pinned to the
+checkpoint's rate with that written next to it.
+
 ## Standing lesson
 
 Every real defect was in the agent's **interface to the game** — what

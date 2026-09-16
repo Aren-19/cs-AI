@@ -28,7 +28,19 @@
 
 #define POL_H1       32
 #define POL_H2       32
-#define POL_ACTIONS  16      // 2 sides x 8 trims, chosen absolutely
+/**
+ * 2 sides x 8 trims, plus one action that presses nothing.
+ *
+ * Without the last one the policy must apply air acceleration at phi ~ +-90 on
+ * every single decision - it can never simply fall. The human does exactly that
+ * far more often at the drop the bot cannot pass: measured across 8 recorded
+ * runs, no strafe key on 5.6% of ticks over a whole run but 12.2% through
+ * 68-76% of the map. With no strafe key there is no wish direction and no air
+ * acceleration at all, so you stop pushing yourself off the surface you are
+ * riding.
+ */
+#define POL_COAST    16      // press nothing this decision
+#define POL_ACTIONS  17      // 2 sides x 8 trims, then coast
 
 #define POL_W1_N  (OBS_DIM * POL_H1)
 #define POL_W2_N  (POL_H1 * POL_H2)
@@ -303,6 +315,10 @@ stock void Pol_ApplyAction(int action, int &side, int &trim)
 {
 	if (action < 0) action = 0;
 	if (action >= POL_ACTIONS) action = POL_ACTIONS - 1;
+	// Coasting keeps whatever side was held, so resuming does not read as a
+	// strafe-key switch and the side stays meaningful while nothing is pressed.
+	if (action == POL_COAST)
+		return;
 	side = (action < POL_TRIMS) ? 1 : -1;
 	trim = action % POL_TRIMS;
 }

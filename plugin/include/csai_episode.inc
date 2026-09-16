@@ -133,6 +133,7 @@ float g_fStateHi       = 0.79;
 int   g_iEpOutcome     = EP_RUNNING;
 int   g_iEpTick        = 0;
 int   g_iEpSteps       = 0;
+bool  g_bEpCoast       = false;   // this decision presses no strafe key
 int   g_iEpStartState  = 0;
 float g_fEpStartS      = 0.0;
 float g_fEpLastS       = 0.0;
@@ -406,7 +407,7 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 	angles[2] = 0.0;
 
 	movement[0] = 0.0;
-	movement[1] = useLeft ? -450.0 : 450.0;
+	movement[1] = g_bEpCoast ? 0.0 : (useLeft ? -450.0 : 450.0);
 	movement[2] = 0.0;
 
 	// Hold jump for the whole run, as a human does - measured 100% of ticks in the
@@ -414,7 +415,7 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 	// auto-hops instead of sticking to the surface and dumping all momentum. It
 	// costs nothing, needs no action, and there is no situation in surf where you
 	// want it released.
-	buttons = (useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_JUMP;
+	buttons = g_bEpCoast ? IN_JUMP : ((useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_JUMP);
 }
 
 stock void Ep_Finish(int outcome)
@@ -624,6 +625,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		else
 		{
 			int prevSide = g_iEpSide;
+			g_bEpCoast = (g_iEpAction == POL_COAST);
 			Pol_ApplyAction(g_iEpAction, g_iEpSide, g_iEpTrim);
 			g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
 			if (g_iEpSide != prevSide)
