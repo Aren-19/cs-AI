@@ -27,7 +27,7 @@ import numpy as np
 
 from ppo import Policy, Value, Adam, compute_gae, ppo_update, write_weights, POL_TOTAL
 from rollout import (Track, read_batch, episode_obs, load_state_arclengths,
-                     OUTCOME_NAMES, OBS_DIM)
+                     OUTCOME_NAMES, OBS_DIM, N_ACTIONS)
 
 CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
 DATA    = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
@@ -149,6 +149,18 @@ def main():
 
     if args.resume and os.path.exists(args.ckpt):
         z = np.load(args.ckpt)
+        # A checkpoint from a different observation or action space cannot be
+        # loaded. Say so plainly: the failure mode otherwise is an opaque shape
+        # error, the learner dying on every restart, and the actors left reading
+        # whatever weights.txt happened to hold - which reports itself only as
+        # "weights size mismatch" spam from the plugin.
+        for i, p in enumerate(policy.params()):
+            if z["p%d" % i].shape != p.shape:
+                print("checkpoint %s does not fit this build: policy tensor %d is "
+                      "%s, expected %s" % (args.ckpt, i, z["p%d" % i].shape, p.shape))
+                print("obs %d, actions %d. Migrate the checkpoint or start fresh."
+                      % (OBS_DIM, N_ACTIONS))
+                return 1
         for i, p in enumerate(policy.params()):
             p[...] = z["p%d" % i]
         for i, p in enumerate(value.params()):
