@@ -106,7 +106,7 @@ function Write-Log([string]$msg) {
 
 function Get-Power {
     if (Test-Path $PowerFile) {
-        $v = (Get-Content $PowerFile -Raw -ErrorAction SilentlyContinue).Trim().ToLower()
+        $v = (Get-Content $PowerFile -Raw -ErrorAction SilentlyContinue).Trim([char]0xFEFF + " `t`r`n").ToLower()
         if ($Levels.ContainsKey($v)) { return $v }
     }
     return 'high'
@@ -114,7 +114,9 @@ function Get-Power {
 
 function Set-Power([string]$level) {
     New-Item -ItemType Directory -Force -Path (Split-Path $PowerFile) | Out-Null
-    Set-Content -Path $PowerFile -Value $level -Encoding utf8
+    # ASCII for the same reason as the marker file above: -Encoding utf8
+    # prepends a byte-order mark, and a level of "﻿high" matches nothing.
+    Set-Content -Path $PowerFile -Value $level -Encoding ascii
 }
 
 function Get-Procs([string]$name, [string]$match) {

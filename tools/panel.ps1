@@ -113,7 +113,7 @@ function Choose-Power {
     $sel = $Levels | Where-Object { $_.Key -eq $c }
     if ($sel) {
         New-Item -ItemType Directory -Force -Path (Split-Path $PowerFile) | Out-Null
-        Set-Content -Path $PowerFile -Value $sel.Name -Encoding utf8
+        Set-Content -Path $PowerFile -Value $sel.Name -Encoding ascii
         Write-Host ("  power set to {0}" -f $sel.Name.ToUpper()) -ForegroundColor Green
         if (-not (Test-Daemon)) { Write-Host '  (training is not running - start it with [1])' -ForegroundColor DarkYellow }
         Start-Sleep -Seconds 2

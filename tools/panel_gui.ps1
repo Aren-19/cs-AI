@@ -114,7 +114,7 @@ function Get-Instances {
 function Get-Power {
     if (Test-Path $PowerFile) {
         $v = (Get-Content $PowerFile -Raw -ErrorAction SilentlyContinue)
-        if ($v) { return $v.Trim().ToLower() }
+        if ($v) { return $v.Trim([char]0xFEFF + " `t`r`n").ToLower() }
     }
     return 'high'
 }
@@ -263,7 +263,7 @@ $cmbPow.Add_SelectedIndexChanged({
     if ($cmbPow.SelectedItem) {
         # The daemon re-reads this file every few seconds, so changing the level
         # needs nothing restarted and nothing trained is lost.
-        Set-Content -Path $PowerFile -Value $cmbPow.SelectedItem -Encoding utf8
+        Set-Content -Path $PowerFile -Value $cmbPow.SelectedItem -Encoding ascii
     }
 })
 
