@@ -9,6 +9,8 @@ param(
     [double]$EntFinal = 0.0,       # anneal the entropy bonus to this (0 = no anneal)
     [int]$EntAnneal = 2000,        # generations to reach EntFinal
     [int]$PreLearn = 0,            # trailing ticks of the wind-up the policy drives
+    [string]$Slot = '',            # name a slot to train a second thing alongside the first
+    [int]$Windup = 0,              # >0 = wind-up episodes of this many ticks
     [double]$FinishBonus = 50.0,   # base reward for finishing at all
     [double]$FinishFloor = 5.0,    # a finish never scores below this, however slow
     [double]$TrimCost = 0.05,      # per aim change between decisions - smoothness
@@ -29,7 +31,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 $PowerFile = Join-Path $Root 'data\power.txt'
 $LogFile = Join-Path $Root 'logs\daemon.log'
 $TrainLog = Join-Path $Root 'data\train_log.csv'
-$StopFile = Join-Path $Root 'data\daemon.stop'
+$StopFile = Join-Path $Root $(if ($Slot) { "data\daemon_$Slot.stop" } else { 'data\daemon.stop' })
 $MapFile  = Join-Path $Root 'data\map.txt'
 $Game     = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source'
 $Data     = Join-Path $Game 'cstrike\addons\sourcemod\data\csai'
@@ -83,11 +85,20 @@ function Get-Procs([string]$name, [string]$match) {
 }
 
 function Stop-All {
+    # Only this slot's processes. Without the filter, stopping one slot killed
+    # every other slot's actors and learner too, because they all match
+    # "learn.py" and "csai_train_batches".
     foreach ($p in @(Get-Procs 'python.exe' '*learn.py*')) {
+        $mine = if ($Slot) { $p.CommandLine -like "*out_$Slot*" }
+                else       { $p.CommandLine -notlike '*--outdir*out_*' }
+        if (-not $mine) { continue }
         Write-Log "  stop learner pid $($p.ProcessId)"
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
     foreach ($p in @(Get-Procs 'srcds_win64.exe' '*csai_train_batches*')) {
+        $mine = if ($Slot) { $p.CommandLine -like "*+csai_slot $Slot*" }
+                else       { $p.CommandLine -notlike '*+csai_slot *' }
+        if (-not $mine) { continue }
         Write-Log "  stop actor pid $($p.ProcessId)"
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
@@ -110,9 +121,21 @@ function Start-Learner {
     if ($EntFinal -gt 0.0) {
         $args += @('--ent-final', $EntFinal, '--ent-anneal', $EntAnneal)
     }
-    if (Test-Path (Join-Path $Root 'data\ckpt.npz')) { $args += '--resume' }
-    $learnerLog = Join-Path $Root 'logs\learner.log'
-    $learnerErr = Join-Path $Root 'logs\learner.err.log'
+    if ($Slot) {
+        $args += @('--weights', ('"' + (Join-Path $Data "weights_$Slot.txt") + '"'),
+                   '--outdir',  ('"' + (Join-Path $Data "out_$Slot") + '"'),
+                   '--ckpt',    ('"' + (Join-Path (Join-Path $Root "data") "ckpt_$Slot.npz") + '"'),
+                   '--log',     ('"' + (Join-Path (Join-Path $Root "data") "train_log_$Slot.csv") + '"'),
+                   '--kl-ref',  '0')
+        if (Test-Path (Join-Path (Join-Path $Root "data") "ckpt_$Slot.npz")) { $args += '--resume' }
+    }
+    elseif (Test-Path (Join-Path $Root 'data\ckpt.npz')) { $args += '--resume' }
+    # Per slot, or two learners write over each other's output and a stale error
+    # from one looks like a live error from the other.
+    $logDir = Join-Path $Root 'logs'
+    $tag = if ($Slot) { "learner_$Slot" } else { 'learner' }
+    $learnerLog = Join-Path $logDir "$tag.log"
+    $learnerErr = Join-Path $logDir "$tag.err.log"
     New-Item -ItemType Directory -Force -Path (Split-Path $learnerLog) | Out-Null
     $lp = Start-Process -FilePath 'python' -ArgumentList $args `
         -WorkingDirectory (Join-Path $Root 'tools') -WindowStyle Hidden `
@@ -149,13 +172,16 @@ function Start-Actor([string]$level, [int]$id = 0) {
         '+csai_prestrafe', '1', '+csai_switchcost', $SwitchCost, '+csai_devcost', $DevCost,
         '+csai_timecost', $TimeCost, '+csai_trimcost', $TrimCost,
         '+csai_finishbonus', $FinishBonus, '+csai_finishfloor', $FinishFloor,
-        '+csai_prelearn', $PreLearn,
+        '+csai_prelearn', $PreLearn, '+csai_windup', $Windup,
         '+csai_bench_timescale', $cfg.Timescale,
         '+csai_bench_quit', '0', '+csai_bench_delay', '8'
     )
     # Only actor 0 keeps -condebug, so parallel instances do not contend on one
     # console.log and eval's log parsing still sees a quiet file.
     if ($id -eq 0) { $a += '-condebug' }
+    # Appended, not inlined: an inline conditional inside the array literal puts
+    # a null element into the argument list and the process fails to start.
+    if ($Slot) { $a += @('+csai_slot', $Slot) }
     $p = Start-Process -FilePath (Join-Path $game 'srcds_win64.exe') -ArgumentList $a `
         -WorkingDirectory $game -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 2
@@ -192,11 +218,18 @@ if ($Stop) {
     exit 0
 }
 
+# One daemon per slot. Two daemons on the same slot would fight over the same
+# weights file and batch directory; on different slots they share nothing.
+$slotTag = if ($Slot) { "-Slot $Slot" } else { '' }
 $others = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*-File*daemon.ps1*' -and
-                           $_.CommandLine -notlike '*-Stop*' })
+                           $_.CommandLine -notlike '*-Stop*' } |
+            Where-Object {
+                $theirs = if ($_.CommandLine -match '-Slot\s+(\S+)') { $Matches[1] } else { '' }
+                $theirs -eq $Slot
+            })
 if ($others.Count -gt 0) {
-    Write-Log "another daemon is already running (pid $($others[0].ProcessId)) - refusing to start a second"
+    Write-Log "another daemon is already running on this slot (pid $($others[0].ProcessId)) - refusing to start a second"
     exit 1
 }
 

@@ -21,8 +21,8 @@ OBS_DIM        = 7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM
 # must match csai_policy.inc
 N_ACTIONS = 17   # 2 sides x 8 trims, plus coast
 
-EP_FELL, EP_FINISHED, EP_TIMEOUT, EP_STUCK = 1, 2, 3, 4
-OUTCOME_NAMES = {1: "fell", 2: "finished", 3: "timeout", 4: "stuck"}
+EP_FELL, EP_FINISHED, EP_TIMEOUT, EP_STUCK, EP_WINDUP = 1, 2, 3, 4, 5
+OUTCOME_NAMES = {1: "fell", 2: "finished", 3: "timeout", 4: "stuck", 5: "windup"}
 
 # 9 core fields + the probe, which needs engine collision and so is logged
 # rather than recomputed here.
@@ -154,7 +154,9 @@ class Episode(object):
     @property
     def terminal(self):
         """True when the episode ended in a real terminal state, not a cutoff."""
-        return self.outcome in (EP_FELL, EP_FINISHED)
+        # A wind-up ends at its handover tick with the reward fully paid, so
+        # there is nothing beyond it to bootstrap from.
+        return self.outcome in (EP_FELL, EP_FINISHED, EP_WINDUP)
 
 def read_batch(path):
     with open(path, "rb") as fh:

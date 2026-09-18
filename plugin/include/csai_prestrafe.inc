@@ -118,6 +118,22 @@ stock void Pre_Select(int which)
 	g_fPreStartAng[2] = 0.0;
 }
 
+/** Place the bot where a wind-up starts, standing still, and leave it there. */
+stock bool Pre_Spawn(int client)
+{
+	if (g_iPreSets > 0)
+		Pre_Select(g_bEval ? (g_iEvalDone % g_iPreSets)
+		                   : RoundToFloor(Pol_Rand() * float(g_iPreSets)));
+	if (g_iPreCount == 0 || client == -1 || !IsClientInGame(client))
+		return false;
+
+	float zero[3];
+	zero[0] = 0.0; zero[1] = 0.0; zero[2] = 0.0;
+	TeleportEntity(client, g_fPreStart, g_fPreStartAng, zero);
+	g_bPreActive = false;          // the policy drives from here, not the recording
+	return true;
+}
+
 stock bool Pre_Begin(int client)
 {
 	if (g_iPreSets > 0)

@@ -250,6 +250,11 @@ void ArmBenchmark()
     g_fFinishFloor    = GetCommandLineParamFloat("+csai_finishfloor", g_fFinishFloor);
     g_fTimePower      = GetCommandLineParamFloat("+csai_timepower", g_fTimePower);
     g_iPreLearned     = GetCommandLineParamInt("+csai_prelearn", g_iPreLearned);
+    GetCommandLineParam("+csai_slot", g_sSlot, sizeof(g_sSlot), "");
+    g_iWindupTicks    = GetCommandLineParamInt("+csai_windup", g_iWindupTicks);
+    g_fWindupYawCap   = GetCommandLineParamFloat("+csai_windupyaw", g_fWindupYawCap);
+    g_iWindupHold     = GetCommandLineParamInt("+csai_winduphold", g_iWindupHold);
+    g_fWindupPosCost  = GetCommandLineParamFloat("+csai_winduppos", g_fWindupPosCost);
     g_fTrimCost       = GetCommandLineParamFloat("+csai_trimcost", g_fTrimCost);
     g_fDeviationCost  = GetCommandLineParamFloat("+csai_devcost", g_fDeviationCost);
     g_iPitchMode      = GetCommandLineParamInt("+csai_pitch", g_iPitchMode);
@@ -264,8 +269,12 @@ void ArmBenchmark()
                   g_fFinishBonus, g_fTimePower, g_fFinishFloor);
     PrintToServer("[CsAI] reward: timecost %.3f per decision, devcost %.2f, switchcost %.2f, trimcost %.2f",
                   g_fTimeCost, g_fDeviationCost, g_fSwitchCost, g_fTrimCost);
-    PrintToServer("[CsAI] wind-up: the policy drives the last %d tick(s) of it (0 = replay the recording whole)",
-                  g_iPreLearned);
+    if (g_iWindupTicks > 0)
+        PrintToServer("[CsAI] wind-up training: %d tick episodes, view capped at %.1f deg/tick, side held %d ticks",
+                      g_iWindupTicks, g_fWindupYawCap, g_iWindupHold);
+    else
+        PrintToServer("[CsAI] wind-up: the policy drives the last %d tick(s) of it (0 = replay the recording whole)",
+                      g_iPreLearned);
 
     char cmdline[512];
     GetCommandLine(cmdline, sizeof(cmdline));
@@ -978,6 +987,9 @@ public Action Cmd_Cfg(int args)
     else if (StrEqual(key, "finishfloor")) g_fFinishFloor = StringToFloat(val);
     else if (StrEqual(key, "timepower"))  g_fTimePower   = StringToFloat(val);
     else if (StrEqual(key, "prelearn"))   g_iPreLearned  = StringToInt(val);
+    else if (StrEqual(key, "windup"))     g_iWindupTicks = StringToInt(val);
+    else if (StrEqual(key, "windupyaw"))  g_fWindupYawCap = StringToFloat(val);
+    else if (StrEqual(key, "winduphold")) g_iWindupHold  = StringToInt(val);
     else if (StrEqual(key, "trimcost"))   g_fTrimCost   = StringToFloat(val);
     else if (StrEqual(key, "states"))     g_iTrainStates  = StringToInt(val);
     else if (StrEqual(key, "statemix"))   g_fStateMix     = StringToFloat(val);

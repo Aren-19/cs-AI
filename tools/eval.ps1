@@ -8,6 +8,8 @@ param(
     [int]$Scripted   = 0,
     [int]$Greedy     = 1,
     [int]$PreLearn   = 0,
+    [int]$Prestrafe  = 1,
+    [int]$Windup     = 0,   # >0 = wind-up episodes of this many ticks   # 0 = skip the recorded wind-up, teleport to state 0
     [int]$FrameSkip  = 2,   # must match what the policy was trained with
     [double]$DevCost = 0.5,
     [double]$SwitchCost = 0.15
@@ -33,9 +35,10 @@ $a = @(
     '+csai_eval', $Runs,
     '+csai_evalgreedy', $Greedy,
     '+csai_scripted', $Scripted,
-    '+csai_prestrafe', '1',
+    '+csai_prestrafe', $Prestrafe,
     '+csai_actor', '99',
     '+csai_prelearn', $PreLearn,
+    '+csai_windup', $Windup,
     '+csai_budget', $Budget,
     '+csai_deviation', $Deviation,
     '+csai_frameskip', $FrameSkip,
