@@ -141,8 +141,19 @@ class SourceFS(object):
         rel = path.replace("\\", "/").lstrip("/")
         if ".." in rel.split("/"):
             return None
+        # os.path.join discards the root when the second part is absolute, so on
+        # Windows "C:/anything" walks straight out of the game directory.
+        if os.path.isabs(rel) or os.path.splitdrive(rel)[0]:
+            return None
         for root in self.roots:
             full = os.path.join(root, rel.replace("/", os.sep))
+            # Belt and braces: the resolved path must still be under the root.
+            try:
+                if os.path.commonpath([os.path.realpath(full),
+                                       os.path.realpath(root)]) != os.path.realpath(root):
+                    continue
+            except ValueError:
+                continue
             if os.path.isfile(full):
                 try:
                     with open(full, "rb") as fh:

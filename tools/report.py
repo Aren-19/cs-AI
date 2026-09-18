@@ -162,7 +162,6 @@ def build(log_path, out_dir):
     ent = [float(r["entropy"]) for r in rows]
     steps = [int(r["steps"]) for r in rows]
     eps = [int(r["episodes"]) for r in rows]
-    fell = [int(r["fell"]) for r in rows]
     fin = [int(r["finished"]) for r in rows]
     wall, prevw = 0.0, None
     for r in rows:

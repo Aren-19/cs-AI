@@ -106,15 +106,26 @@ function Get-Progress {
     $log = Join-Path $Data 'train_log.csv'
     if (-not (Test-Path $log)) { return $null }
     try {
+        # Columns by name. The log has gained columns twice; fixed offsets would
+        # read the wrong ones without any sign of it.
+        $head = (Get-Content $log -TotalCount 1) -split ','
+        $iGen = [array]::IndexOf($head, 'gen')
+        $iRun = [array]::IndexOf($head, 'runs_from_start')
+        $iFin = [array]::IndexOf($head, 'finished_from_start')
+        $iMed = [array]::IndexOf($head, 'median_full_run_s')
+        if ($iGen -lt 0 -or $iRun -lt 0 -or $iFin -lt 0 -or $iMed -lt 0) { return $null }
+        $need = (@($iGen, $iRun, $iFin, $iMed) | Measure-Object -Maximum).Maximum + 1
+
         $tail = @(Get-Content $log -Tail 40 -ErrorAction SilentlyContinue)
         if ($tail.Count -lt 2) { return $null }
         $runs = 0.0; $fin = 0.0; $med = 0.0; $medN = 0; $gen = ''
         foreach ($line in $tail) {
             $c = $line.Split(',')
-            if ($c.Count -lt 21) { continue }
-            $gen = $c[0]
-            $runs += [double]$c[17]; $fin += [double]$c[18]
-            if ([double]$c[20] -gt 0) { $med += [double]$c[20]; $medN++ }
+            if ($c.Count -lt $need) { continue }
+            if ($c[$iRun] -eq '') { continue }
+            $gen = $c[$iGen]
+            $runs += [double]$c[$iRun]; $fin += [double]$c[$iFin]
+            if ([double]$c[$iMed] -gt 0) { $med += [double]$c[$iMed]; $medN++ }
         }
         $rate = 0.0
         if ($runs -gt 0) { $rate = 100.0 * $fin / $runs }

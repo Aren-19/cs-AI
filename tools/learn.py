@@ -42,7 +42,7 @@ def find_next_batch(outdir, processed):
 def read_done(path):
     info = {}
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8-sig") as fh:
             for line in fh:
                 p = line.split()
                 if len(p) == 2:

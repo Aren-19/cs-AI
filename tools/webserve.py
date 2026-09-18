@@ -24,6 +24,17 @@ REPLAY_DIRS = [
 MAPS_DIR = os.path.join(CSTRIKE, "maps")
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "webcache")
 
+# The viewer is served from another port, so it is cross-origin and does need a
+# CORS header. It does not need "*": that let any page the browser had open read
+# whatever this server would return.
+ALLOWED_ORIGINS = ("http://127.0.0.1:3000", "http://localhost:3000")
+
+def cors_origin(req):
+    origin = req.headers.get("Origin")
+    if origin in ALLOWED_ORIGINS:
+        return origin
+    return ALLOWED_ORIGINS[0]
+
 CSPAK_MISSING = 0xFFFFFFFF
 
 _fs = None
@@ -43,15 +54,24 @@ def fs():
         return _fs
 
 def find_replay(name):
-    """Accept a bare name, a name with .replay, or an absolute path."""
-    if os.path.isabs(name) and os.path.isfile(name):
-        return name
+    """Resolve a replay name inside REPLAY_DIRS. Never outside them."""
+    # This used to accept an absolute path and serve it. Together with a
+    # wildcard CORS header that let any page in the browser read any file on
+    # the machine while the viewer was running.
     cand = name if name.lower().endswith(".replay") else name + ".replay"
     cand = os.path.basename(cand)
+    if not cand or cand in (".", ".."):
+        return None
     for d in REPLAY_DIRS:
         p = os.path.join(d, cand)
-        if os.path.isfile(p):
-            return p
+        if not os.path.isfile(p):
+            continue
+        try:
+            if os.path.commonpath([os.path.realpath(p), os.path.realpath(d)]) != os.path.realpath(d):
+                continue
+        except ValueError:
+            continue
+        return p
     return None
 
 def replay_header(path):
@@ -147,7 +167,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", cors_origin(self))
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -162,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(size))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", cors_origin(self))
         self.send_header("Cache-Control", "public, max-age=3600")
         self.end_headers()
         if self.command == "HEAD":
@@ -176,6 +196,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self._send(204, b"", "text/plain", {
+            "Access-Control-Allow-Origin": cors_origin(self),
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
         })

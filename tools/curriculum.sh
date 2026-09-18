@@ -14,7 +14,15 @@ gen_now() { tail -1 data/train_log.csv | cut -d, -f1; }
 
 since() {
   awk -F, -v g0="$1" -v trail="${TRAIL:-80}" '
-    NR>1 && $18!="" && $1+0>g0 { c++; N[c]=$18; F[c]=$19; M[c]=$21+0; if($20+0>0 && (b==0||$20+0<b)) b=$20+0 }
+    NR==1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+    {
+      if ($(col["runs_from_start"]) == "") next
+      if ($(col["gen"]) + 0 <= g0) next
+      c++; N[c] = $(col["runs_from_start"]); F[c] = $(col["finished_from_start"])
+      M[c] = $(col["median_full_run_s"]) + 0
+      b2 = $(col["best_full_run_s"]) + 0
+      if (b2 > 0 && (b == 0 || b2 < b)) b = b2
+    }
     END{
       if(!c) { printf "0 0 0 0 0"; exit }
       lo = c - trail + 1; if (lo < 1) lo = 1
@@ -34,7 +42,12 @@ MARK=${MARK:-$(gen_now)}
 # The median run time this is allowed to drift from, measured before the first
 # step. Without it there is nothing to compare against and slowing down is free.
 base_median() {
-  awk -F, -v g="$1" 'NR>1 && $21+0>0 && $1+0<=g && $1+0>g-200 {m+=$21; c++}
+  awk -F, -v g="$1" '
+    NR==1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+    {
+      v = $(col["median_full_run_s"]) + 0
+      if (v > 0 && $(col["gen"]) + 0 <= g && $(col["gen"]) + 0 > g - 200) { m += v; c++ }
+    }
     END{ if(c) printf "%.3f", m/c; else printf "0" }' data/train_log.csv
 }
 BASE_MED=${BASE_MED:-$(base_median "$MARK")}

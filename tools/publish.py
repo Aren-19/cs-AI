@@ -20,7 +20,14 @@ def main():
     ap.add_argument("--weights", default=WEIGHTS)
     args = ap.parse_args()
 
-    z = np.load(args.ckpt)
+    if not os.path.isfile(args.ckpt):
+        print("no such checkpoint: %s" % args.ckpt)
+        return 1
+    try:
+        z = np.load(args.ckpt)
+    except Exception as e:
+        print("%s is not a readable checkpoint (%s)" % (args.ckpt, type(e).__name__))
+        return 1
     policy = Policy(np.random.default_rng(0))
     n = 0
     for i, p in enumerate(policy.params()):

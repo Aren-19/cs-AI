@@ -55,8 +55,6 @@ def main():
     gain = col("mean_progress")
     best = col("best_progress")
     ent = col("entropy")
-    fell = col("fell", int)
-    fin = col("finished", int)
     eps = col("episodes", int)
     steps = col("steps", int)
     wall = col("wall")

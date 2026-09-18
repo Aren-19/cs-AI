@@ -1,7 +1,6 @@
 """Read Source BSP geometry for the replay viewer."""
 
 import argparse
-import json
 import lzma
 import os
 import struct

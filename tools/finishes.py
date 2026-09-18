@@ -39,9 +39,14 @@ def main():
     ap.add_argument("--quiet", action="store_true", help="one line only")
     args = ap.parse_args()
 
-    track = Track(os.path.join(DATA, "%s_track.txt" % args.map))
+    tpath = os.path.join(DATA, "%s_track.txt" % args.map)
+    if not os.path.isfile(tpath):
+        print("no track for %s at %s" % (args.map, tpath))
+        print("run:  python tools/setup_map.py %s" % args.map)
+        return 1
+    track = Track(tpath)
     if not track.n:
-        print("no track for %s" % args.map)
+        print("the track file for %s is empty" % args.map)
         return 1
     ref = reference_time(os.path.join(DATA, "%s_states.txt" % args.map))
 
