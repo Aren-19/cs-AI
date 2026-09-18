@@ -164,7 +164,7 @@ def main():
     # into max would quietly halve the speed of whatever it was trying to fix.
     ap.add_argument("--daemon-args", dest="daemon_args", default=
                     "-Power high -FrameSkip 2 -StateMix 0.3 -StateLo 0.73 -StateHi 0.83 "
-                    "-Entropy 0.01 -TimeCost 0.08 -TimeBonus 30 -TrimCost 0.05 -SwitchCost 0.40")
+                    "-Entropy 0.01 -TimeCost 0.08 -TrimCost 0.05 -SwitchCost 0.40")
     args = ap.parse_args()
 
     dargs = ["-Map", args.map] + args.daemon_args.split()

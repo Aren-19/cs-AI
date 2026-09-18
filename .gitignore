@@ -17,3 +17,4 @@ web/offstyles-web/
 web/replay-viewer/
 data/*.prev
 data/map.txt
+data/daemon_args.txt

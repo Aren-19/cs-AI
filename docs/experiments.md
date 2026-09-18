@@ -1362,3 +1362,59 @@ points with no prior hint, and surf_demise teleports 2.5 s in - roughly 19,000
 units, far past the 64 points the window looks ahead. Chained from the previous
 checkpoint the last five read 1,120 to 14,616 units off a line they are sitting
 exactly on, which is how the teleport first showed up at all.
+
+## Learning the opening did not work
+
+The wind-up experiment ran to PreLearn=40 and the answer is no. Every saved
+checkpoint, evaluated the same way - eight deterministic runs, one per recorded
+opening, at the setting it was trained with:
+
+    checkpoint            wind-up ticks   finished   median
+    gen 8858 (baseline)         0            8/8     39.63 s
+    gen 9034                    8            7/8     39.67 s
+    gen 9311                   16            7/8     39.67 s
+    gen 9453                   24            8/8     40.21 s
+    gen 9893                   32            8/8     42.22 s
+
+Handing the policy the last 8 or 16 ticks was neutral and cost one opening.
+Beyond that it got steadily worse. The best policy is still the one that replays
+the recorded wind-up whole, so that is what has been restored.
+
+The reason is the discount. At gamma 0.997 and frameskip 2 the horizon is 333
+decisions, about ten seconds; the finish is roughly 1300 decisions after the
+opening, so the time bonus reaches it at 2% strength. Nothing was asking the
+wind-up to be fast. It was only being asked not to fall over, and it obliged.
+
+### The reward stopped being able to see the problem
+
+Worse, and the part worth remembering: the run degraded for eight hundred
+generations and nothing objected.
+
+    gens 9000-9099   median 39.80 s   finishing 91%
+    gens 9200-9299   median 40.30 s   finishing 90%
+    gens 9400-9499   median 41.84 s   finishing 87%
+    gens 9700-9799   median 44.37 s   finishing 88%
+    gens 9800-9899   median 44.47 s   finishing 90%
+
+Four and a half seconds slower with the finish rate untouched. The two-sided time
+bonus was a straight line, `50 - 30 * (seconds over the reference)`, floored at 5
+so that a slow finish still beat a fall. Past about 40.5 s that floor is what
+every finish gets - so the reward could not tell a 41 second run from a 44 second
+one, and the policy drifted through the flat part freely. The cliff that the
+two-sided bonus was built to remove had simply been moved somewhere else on the
+scale, out of sight of the range anyone was checking.
+
+It is now a ratio, `50 * (reference / time) ^ 8`, which is always positive so a
+finish always outscores a fall without a floor doing the work, falls off fastest
+where the runs actually are, and never flattens:
+
+    39.05 s -> 50.0    40.5 s -> 37.3    44.4 s -> 17.9    60 s -> 1.6
+
+`+csai_timebonus` is gone rather than left parsed and ignored.
+
+And the curriculum could not see it either: it promoted five times on finish rate
+alone while the runs got four seconds slower, because the finish rate was the
+only thing it watched. It now measures median run time against a baseline taken
+before the first step and rolls back if it drifts more than 0.4 s. Checked
+against the run that went wrong, that would have stopped it around gen 9450
+instead of gen 9893.

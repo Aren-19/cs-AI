@@ -131,7 +131,7 @@ function Start-Training {
     Start-Process -FilePath 'powershell' `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                         (Join-Path $Root 'tools\daemon.ps1')) `
-        -WorkingDirectory $Root -WindowStyle Minimized | Out-Null
+        -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
     Start-Sleep -Seconds 6
     Write-Host '  training started. You can close this window; it keeps running.' -ForegroundColor Green
     Start-Sleep -Seconds 3

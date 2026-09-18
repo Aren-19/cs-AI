@@ -1,5 +1,5 @@
 @echo off
 rem CsAI control panel - double-click to open.
-title CsAI
+rem Started through a hidden console so the panel is the only window on screen.
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\panel.ps1"
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0tools\panel_gui.ps1"

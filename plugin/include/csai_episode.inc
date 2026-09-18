@@ -219,14 +219,14 @@ float g_fSwitchCost    = 0.40;
  * sided at 30 a second, a finish one second slow would score -20 against a
  * fall's -1, and the policy would correctly learn that falling is better than
  * finishing slowly. So: a larger base, and a floor under it, chosen so that the
- * gradient stays live across the whole range runs actually land in (39.0 to
- * 40.6 s) and every finish outscores every fall no matter how slow.
+ * payout falls away smoothly with the clock and never flattens out, so there is
+ * no time past which the reward stops caring how slow the run was.
  *
  *     finish at 39.045 s (the reference)   50.0
- *     finish at 39.478 s (the best so far) 37.0
- *     finish at 39.700 s (typical)         30.3
- *     finish at 40.500 s                    6.3
- *     finish at 41.000 s or slower          5.0   (the floor)
+ *     finish at 39.600 s                    44.7
+ *     finish at 40.500 s                    37.3
+ *     finish at 42.200 s                    26.9
+ *     finish at 50.000 s                     6.9
  *     fell or stuck                         -1.0
  *
  * TRIM COST: changing the aim angle between decisions. The switch cost priced
@@ -234,9 +234,9 @@ float g_fSwitchCost    = 0.40;
  * what separates the bot's 0.45 deg median view movement from the human's 0.33.
  */
 float g_fTimeCost      = 0.08;    // per decision
-float g_fTimeBonus     = 30.0;    // per second against the reference, on finishing
-float g_fFinishBonus   = 50.0;    // base for finishing at all; was hardcoded at 10.0
-float g_fFinishFloor   =  5.0;    // a finish never scores below this, however slow
+float g_fFinishBonus   = 50.0;    // what finishing exactly on the reference pays
+float g_fFinishFloor   =  0.5;    // a finish never scores below this, however slow
+float g_fTimePower     =  8.0;    // how sharply the payout falls off with time
 float g_fTrimCost      = 0.05;    // per change of trim between decisions
 float g_fStartMaxFrac  = 0.90;     // never start so near the end that we finish instantly
 
@@ -564,10 +564,26 @@ stock void Ep_Finish(int outcome)
 			// compared against does not include them. Left in, every reported
 			// time would silently grow by the length of the wind-up.
 			float secs = float(g_iEpTick - g_iEpPreTicks) * GetTickInterval();
-			terminal += g_fTimeBonus * (g_fRefTime - secs);
 
-			// The floor is not cosmetic. Without it a finish a second slow
-			// scores below a fall, and giving up becomes the better move.
+			/**
+			 * A ratio, not a straight line with a floor under it.
+			 *
+			 * The line was bonus - 30 per second over the reference, floored
+			 * so a slow finish still beat a fall. Both halves were needed and
+			 * together they made a cliff: past about 40.5 s every finish paid
+			 * exactly the floor, so the reward could no longer tell a 41
+			 * second run from a 44 second one. The policy drifted straight
+			 * through it - median run time went 39.8, 40.3, 41.8, 43.2, 44.5
+			 * over eight hundred generations while the finish rate held at
+			 * 90%, and nothing objected, because by then nothing could.
+			 *
+			 * (reference / time) to a power has no such edge. It is always
+			 * positive, so a finish always outscores a fall and no floor is
+			 * doing real work; it falls off fastest right where the runs are;
+			 * and the slope never reaches zero however slow the run gets.
+			 */
+			if (secs > 0.01)
+				terminal = g_fFinishBonus * Pow(g_fRefTime / secs, g_fTimePower);
 			if (terminal < g_fFinishFloor)
 				terminal = g_fFinishFloor;
 		}

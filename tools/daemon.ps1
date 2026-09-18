@@ -29,7 +29,6 @@ param(
     [int]$FrameSkip = 2,           # ticks per decision
     [double]$DevCost = 0.5,        # penalty for drifting off the reference line
     [double]$TimeCost = 0.08,      # charged per decision, so finishing sooner pays
-    [double]$TimeBonus = 30.0,     # per second against the human's time, on finishing
     [double]$EntFinal = 0.0,       # anneal the entropy bonus to this (0 = no anneal)
     [int]$EntAnneal = 2000,        # generations to reach EntFinal
     [int]$PreLearn = 0,            # trailing ticks of the wind-up the policy drives
@@ -220,7 +219,7 @@ function Start-Actor([string]$level, [int]$id = 0) {
         '+csai_states', '1', '+csai_budget', '6000', '+csai_deviation', '600',
         '+csai_statemix', $StateMix, '+csai_statelo', $StateLo, '+csai_statehi', $StateHi,
         '+csai_prestrafe', '1', '+csai_switchcost', $SwitchCost, '+csai_devcost', $DevCost,
-        '+csai_timecost', $TimeCost, '+csai_timebonus', $TimeBonus, '+csai_trimcost', $TrimCost,
+        '+csai_timecost', $TimeCost, '+csai_trimcost', $TrimCost,
         '+csai_finishbonus', $FinishBonus, '+csai_finishfloor', $FinishFloor,
         '+csai_prelearn', $PreLearn,
         '+csai_bench_timescale', $cfg.Timescale,

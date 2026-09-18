@@ -209,11 +209,11 @@ public void OnMapStart()
     // file, which LoadStates has only just read. Printed against g_fRefTime = 0
     // this worked example would have been confidently wrong in the log.
     if (g_fRefTime > 0.0)
-        PrintToServer("[CsAI] reward: a finish pays %.1f at the reference %.3fs, %.1f at 39.70s, %.1f at 40.50s, never below %.1f (a fall pays -1.0)",
+        PrintToServer("[CsAI] reward: a finish pays %.1f at the reference %.3fs, %.1f at 40.0s, %.1f at 42.0s, %.1f at 50.0s (a fall pays -1.0)",
                       g_fFinishBonus, g_fRefTime,
-                      g_fFinishBonus + g_fTimeBonus * (g_fRefTime - 39.70),
-                      g_fFinishBonus + g_fTimeBonus * (g_fRefTime - 40.50),
-                      g_fFinishFloor);
+                      g_fFinishBonus * Pow(g_fRefTime / 40.0, g_fTimePower),
+                      g_fFinishBonus * Pow(g_fRefTime / 42.0, g_fTimePower),
+                      g_fFinishBonus * Pow(g_fRefTime / 50.0, g_fTimePower));
     Track_Load();
 
     /**
@@ -298,9 +298,9 @@ void ArmBenchmark()
     g_iActorId        = GetCommandLineParamInt("+csai_actor", 0);
     g_fSwitchCost     = GetCommandLineParamFloat("+csai_switchcost", g_fSwitchCost);
     g_fTimeCost       = GetCommandLineParamFloat("+csai_timecost", g_fTimeCost);
-    g_fTimeBonus      = GetCommandLineParamFloat("+csai_timebonus", g_fTimeBonus);
     g_fFinishBonus    = GetCommandLineParamFloat("+csai_finishbonus", g_fFinishBonus);
     g_fFinishFloor    = GetCommandLineParamFloat("+csai_finishfloor", g_fFinishFloor);
+    g_fTimePower      = GetCommandLineParamFloat("+csai_timepower", g_fTimePower);
     g_iPreLearned     = GetCommandLineParamInt("+csai_prelearn", g_iPreLearned);
     g_fTrimCost       = GetCommandLineParamFloat("+csai_trimcost", g_fTrimCost);
     g_fDeviationCost  = GetCommandLineParamFloat("+csai_devcost", g_fDeviationCost);
@@ -323,8 +323,8 @@ void ArmBenchmark()
     // the spec literally and shifted every argument after it by one, so the
     // floor read as 30 and the time cost as 5. The check caught its own bug on
     // the first run, which is the argument for having it.
-    PrintToServer("[CsAI] reward: finish %.1f, floor %.1f, time %.1f per second vs the reference",
-                  g_fFinishBonus, g_fFinishFloor, g_fTimeBonus);
+    PrintToServer("[CsAI] reward: finish %.1f x (reference / time) ^ %.1f, never below %.1f",
+                  g_fFinishBonus, g_fTimePower, g_fFinishFloor);
     PrintToServer("[CsAI] reward: timecost %.3f per decision, devcost %.2f, switchcost %.2f, trimcost %.2f",
                   g_fTimeCost, g_fDeviationCost, g_fSwitchCost, g_fTrimCost);
     PrintToServer("[CsAI] wind-up: the policy drives the last %d tick(s) of it (0 = replay the recording whole)",
@@ -1099,9 +1099,9 @@ public Action Cmd_Cfg(int args)
     else if (StrEqual(key, "pitchfixed")) g_fPitchFixed = StringToFloat(val);
     else if (StrEqual(key, "switchcost")) g_fSwitchCost = StringToFloat(val);
     else if (StrEqual(key, "timecost"))   g_fTimeCost   = StringToFloat(val);
-    else if (StrEqual(key, "timebonus"))  g_fTimeBonus  = StringToFloat(val);
     else if (StrEqual(key, "finishbonus")) g_fFinishBonus = StringToFloat(val);
     else if (StrEqual(key, "finishfloor")) g_fFinishFloor = StringToFloat(val);
+    else if (StrEqual(key, "timepower"))  g_fTimePower   = StringToFloat(val);
     else if (StrEqual(key, "prelearn"))   g_iPreLearned  = StringToInt(val);
     else if (StrEqual(key, "trimcost"))   g_fTrimCost   = StringToFloat(val);
     else if (StrEqual(key, "states"))     g_iTrainStates  = StringToInt(val);

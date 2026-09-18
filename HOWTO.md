@@ -1,22 +1,30 @@
 # Running it
 
-Double-click **`CsAI.bat`**. That's the whole interface.
+Double-click **`CsAI.bat`**. That's the whole interface: one window.
 
 ```
-  CsAI - Counter-Strike: Source surf AI
-  ---------------------------------------------------------------
-  training : RUNNING   power: HIGH
-  progress : gen 149   gain 7.70%   best 18.14%   entropy 1.58
-  viewer   : http://127.0.0.1:3000
-  target   : beat 39.10 s on surf_demise (100% of track)
-  ---------------------------------------------------------------
+  training: running   power: high   game servers: 6
+  generation 8870   finishing 89% of runs   median run 39.81s   the time to beat is 39.05s
 
-   [1] Start training          [2] Stop training
-   [3] Change power level      [4] Watch replays (viewer)
-   [5] Show report             [6] Make a replay now
-   [7] Open reports folder     [8] Live log
-   [0] Exit  (training keeps running)
+   what        pid     cpu    memory   window   doing
+   daemon      15132   1%     93 MB    none     supervisor
+   learner     18108   78%    109 MB   hidden   ppo update
+   actor 0     10156   96%    324 MB   hidden   collecting episodes
+   actor 1     18556   95%    323 MB   hidden   collecting episodes
+   ...
+
+   [start training] [stop training]   power: high
+   [show window]    [hide window]     [hide them all]
+   [replay viewer]  [report]          [open folder]
 ```
+
+Training runs six game servers, a learner and a supervisor, and each of those
+opens its own console. They all start hidden and the panel puts away any that
+turn up, so the only window on screen is this one. Pick a row and press **show
+window** - or just double-click it - to bring that one console up when you want
+to read it, and again to put it away.
+
+The bottom half tails the logs. The drop-down picks which one.
 
 **Closing the panel does not stop training.** It runs in the background until you
 choose [2], so you can start it and walk away for hours.

@@ -28,11 +28,16 @@ more often than a person would. Both are being worked on.
 
 ## Running it
 
-Double-click `CsAI.bat`. That is the whole thing. It gives you a menu to start
-and stop training, change how much of your computer it uses, watch replays and
-read reports.
+Double-click `CsAI.bat`. That is the whole thing: one window that starts and
+stops training, changes how much of your computer it uses, lists everything that
+is running, and opens replays and reports.
 
-Closing that window does not stop training. It keeps going in the background, so
+Training runs several game servers plus a learner in the background. They all
+start hidden, so you get one window instead of a screen full of them. If you want
+to look inside one, double-click its row in the list and that console appears;
+double-click again and it goes away.
+
+Closing the panel does not stop training. It keeps going in the background, so
 you can start it and leave.
 
 `Viewer.bat` opens a 3D replay viewer in your browser so you can watch what the
