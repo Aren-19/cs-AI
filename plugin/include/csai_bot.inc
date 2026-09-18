@@ -36,6 +36,7 @@ float g_fStateAngles[MAX_STATES][3];
 float g_fStateVel[MAX_STATES][3];
 float g_fStateFrac[MAX_STATES];
 int   g_iStateCount = 0;
+float g_fRefTime    = 0.0;   // the human's clean time for this map, seconds
 char  g_sStateMap[PLATFORM_MAX_PATH];
 
 void LoadStates()
@@ -67,7 +68,27 @@ void LoadStates()
     while (!f.EndOfFile() && f.ReadLine(line, sizeof(line)))
     {
         TrimString(line);
-        if (line[0] == '\0' || line[0] == '#')
+        if (line[0] == '#')
+        {
+            // The reference time rides in this file's own header, so the
+            // speed objective is the map's own number rather than a constant.
+            int at = StrContains(line, "clean_time=");
+            if (at != -1)
+            {
+                char tmp[24];
+                int k = 0;
+                at += 11;
+                while (at + k < strlen(line) && line[at + k] != ' ' && k < 23)
+                {
+                    tmp[k] = line[at + k];
+                    k++;
+                }
+                tmp[k] = '\0';
+                g_fRefTime = StringToFloat(tmp);
+            }
+            continue;
+        }
+        if (line[0] == '\0')
             continue;
 
         int n = ExplodeString(line, " ", parts, sizeof(parts), sizeof(parts[]));
@@ -92,7 +113,10 @@ void LoadStates()
     delete f;
 
     strcopy(g_sStateMap, sizeof(g_sStateMap), map);
-    PrintToServer("[CsAI] loaded %d start states for %s", g_iStateCount, map);
+    PrintToServer("[CsAI] loaded %d start states for %s (reference %.2fs)",
+                  g_iStateCount, map, g_fRefTime);
+    if (g_fRefTime <= 0.0)
+        PrintToServer("[CsAI] no reference time in the states file - the speed bonus cannot pay");
 
     if (g_iStateCount > 0)
     {

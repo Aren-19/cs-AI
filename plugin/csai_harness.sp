@@ -85,6 +85,13 @@ ConVar    g_cvTimescale;
 ConVar    g_cvFpsMax;
 ConVar    g_cvCheats;
 
+// The poll timer carries TIMER_FLAG_NO_MAPCHANGE, so a map change kills it -
+// and OnPluginStart, which created it, runs only once per load. After one map
+// change the plugin would sit there loaded and inert, answering commands but
+// never picking up new weights or closing a batch. Kept in a handle so
+// OnMapStart can put it back without ever running two.
+Handle    g_hPollTimer      = null;
+
 // ----------------------------------------------------------------- init ----
 public void OnPluginStart()
 {
@@ -146,7 +153,7 @@ public void OnPluginStart()
     RegServerCmd("csai_obsdump", Cmd_ObsDump, "csai_obsdump <n> - dump n observation rows for the parity check");
     RegServerCmd("csai_cfg",    Cmd_Cfg,    "csai_cfg <key> <value> - tune batch/frameskip/deviation/states");
 
-    CreateTimer(0.25, Timer_TrainPoll, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+    g_hPollTimer = CreateTimer(0.25, Timer_TrainPoll, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
     HookEvent("player_spawn", Event_PlayerSpawn, EventHookMode_Post);
 
@@ -169,6 +176,15 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast
                   GetGameTime(), o[0], o[1], o[2], g_bDriving ? "yes" : "no");
 }
 
+public void OnMapEnd()
+{
+    // TIMER_FLAG_NO_MAPCHANGE means SourceMod has already killed this timer and
+    // freed the handle. Dropping our reference is all that is wanted - calling
+    // KillTimer on it here would be an error - and it is what lets OnMapStart
+    // tell "gone, recreate it" from "still running, leave it alone".
+    g_hPollTimer = null;
+}
+
 public void OnMapStart()
 {
     if (g_bTraining)
@@ -182,8 +198,57 @@ public void OnMapStart()
             ServerCommand("quit");
     }
 
+    // The map change that just happened killed the poll timer. Nothing else
+    // recreates it, so without this the plugin is inert from here on.
+    if (g_hPollTimer == null)
+        g_hPollTimer = CreateTimer(0.25, Timer_TrainPoll, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+
     LoadStates();
+
+    // Here, not in OnPluginStart: the reference time comes out of the states
+    // file, which LoadStates has only just read. Printed against g_fRefTime = 0
+    // this worked example would have been confidently wrong in the log.
+    if (g_fRefTime > 0.0)
+        PrintToServer("[CsAI] reward: a finish pays %.1f at the reference %.3fs, %.1f at 39.70s, %.1f at 40.50s, never below %.1f (a fall pays -1.0)",
+                      g_fFinishBonus, g_fRefTime,
+                      g_fFinishBonus + g_fTimeBonus * (g_fRefTime - 39.70),
+                      g_fFinishBonus + g_fTimeBonus * (g_fRefTime - 40.50),
+                      g_fFinishFloor);
     Track_Load();
+
+    /**
+     * Re-derive each checkpoint's position along the TRACK.
+     *
+     * The states file stores `frac` as the frame index over the frame count -
+     * how far through the run in TIME, not in distance. The run is far slower at
+     * the start than the end, so the two diverge by up to 11 points: the
+     * checkpoint stored as 0.739 sits at 66.3% of the track, and 0.826 sits at
+     * 76.9%. Every -StateLo/-StateHi ever passed therefore selected a band about
+     * seven points earlier than whoever typed it intended.
+     *
+     * A full scan, not the windowed one: these are isolated points with no prior
+     * hint, and surf_demise teleports 2.5 s in, so a hint chained from the
+     * previous checkpoint cannot follow it. Chained, the last five checkpoints
+     * read 1120 to 14616 units off a line they are actually sitting on.
+     */
+    if (g_iTrackCount > 0)
+    {
+        for (int i = 0; i < g_iStateCount; i++)
+        {
+            int ti = Track_Nearest(g_fStateOrigin[i], -1);
+            if (ti < 0)
+                continue;
+            float closest[3], dist;
+            float s = Track_Project(g_fStateOrigin[i], ti, closest, dist);
+            if (g_fTrackLength > 0.0)
+                g_fStateFrac[i] = s / g_fTrackLength;
+        }
+        PrintToServer("[CsAI] checkpoints resolved against the track: %d states, %.1f%% to %.1f%%",
+                      g_iStateCount,
+                      (g_iStateCount > 0) ? g_fStateFrac[0] * 100.0 : 0.0,
+                      (g_iStateCount > 0) ? g_fStateFrac[g_iStateCount - 1] * 100.0 : 0.0);
+    }
+
     Pre_Load();          // single-file fallback, if no recordings exist
     Demo_Load();
     Pre_BuildFromDemos();   // prefer the recorded prestrafes
@@ -232,6 +297,12 @@ void ArmBenchmark()
     g_bEvalGreedy     = (GetCommandLineParamInt("+csai_evalgreedy", 1) != 0);
     g_iActorId        = GetCommandLineParamInt("+csai_actor", 0);
     g_fSwitchCost     = GetCommandLineParamFloat("+csai_switchcost", g_fSwitchCost);
+    g_fTimeCost       = GetCommandLineParamFloat("+csai_timecost", g_fTimeCost);
+    g_fTimeBonus      = GetCommandLineParamFloat("+csai_timebonus", g_fTimeBonus);
+    g_fFinishBonus    = GetCommandLineParamFloat("+csai_finishbonus", g_fFinishBonus);
+    g_fFinishFloor    = GetCommandLineParamFloat("+csai_finishfloor", g_fFinishFloor);
+    g_iPreLearned     = GetCommandLineParamInt("+csai_prelearn", g_iPreLearned);
+    g_fTrimCost       = GetCommandLineParamFloat("+csai_trimcost", g_fTrimCost);
     g_fDeviationCost  = GetCommandLineParamFloat("+csai_devcost", g_fDeviationCost);
     g_iPitchMode      = GetCommandLineParamInt("+csai_pitch", g_iPitchMode);
     g_fPitchFixed     = GetCommandLineParamFloat("+csai_pitchfixed", g_fPitchFixed);
@@ -240,6 +311,25 @@ void ArmBenchmark()
         Pol_Seed(seed);
     if (g_iFrameSkip < 1)
         g_iFrameSkip = 1;
+
+    // Echo what the reward actually ended up as, and what it pays for a finish
+    // at three real times. Every silent-parameter bug in this project would have
+    // been one line of log away from obvious: a forced side that parsed as 0
+    // because the parser rejects negatives, an eval driving the policy at three
+    // times its own decision rate, a batch marker that was never written. A
+    // setting you cannot see is a setting you are guessing at.
+    // One value per line, and no format flags beyond %f - SourcePawn's
+    // PrintToServer does not take "%+.1f", and rather than erroring it printed
+    // the spec literally and shifted every argument after it by one, so the
+    // floor read as 30 and the time cost as 5. The check caught its own bug on
+    // the first run, which is the argument for having it.
+    PrintToServer("[CsAI] reward: finish %.1f, floor %.1f, time %.1f per second vs the reference",
+                  g_fFinishBonus, g_fFinishFloor, g_fTimeBonus);
+    PrintToServer("[CsAI] reward: timecost %.3f per decision, devcost %.2f, switchcost %.2f, trimcost %.2f",
+                  g_fTimeCost, g_fDeviationCost, g_fSwitchCost, g_fTrimCost);
+    PrintToServer("[CsAI] wind-up: the policy drives the last %d tick(s) of it (0 = replay the recording whole)",
+                  g_iPreLearned);
+
 
     char cmdline[512];
     GetCommandLine(cmdline, sizeof(cmdline));
@@ -1008,6 +1098,12 @@ public Action Cmd_Cfg(int args)
     else if (StrEqual(key, "pitch"))      g_iPitchMode = StringToInt(val);
     else if (StrEqual(key, "pitchfixed")) g_fPitchFixed = StringToFloat(val);
     else if (StrEqual(key, "switchcost")) g_fSwitchCost = StringToFloat(val);
+    else if (StrEqual(key, "timecost"))   g_fTimeCost   = StringToFloat(val);
+    else if (StrEqual(key, "timebonus"))  g_fTimeBonus  = StringToFloat(val);
+    else if (StrEqual(key, "finishbonus")) g_fFinishBonus = StringToFloat(val);
+    else if (StrEqual(key, "finishfloor")) g_fFinishFloor = StringToFloat(val);
+    else if (StrEqual(key, "prelearn"))   g_iPreLearned  = StringToInt(val);
+    else if (StrEqual(key, "trimcost"))   g_fTrimCost   = StringToFloat(val);
     else if (StrEqual(key, "states"))     g_iTrainStates  = StringToInt(val);
     else if (StrEqual(key, "statemix"))   g_fStateMix     = StringToFloat(val);
     else if (StrEqual(key, "statelo"))    g_fStateLo      = StringToFloat(val);

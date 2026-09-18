@@ -13,17 +13,79 @@ import argparse
 import csv
 import datetime
 import glob
+import math
 import io
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
+from rollout import N_ACTIONS
+
 BLOCKS = " .:-=+*#%@"
-HUMAN_TIME = 39.10
-TRACK_UNITS = 135547.0
+
+CSTRIKE = os.path.join(r"C:\Program Files (x86)\Steam\steamapps\common",
+                       "Counter-Strike Source", "cstrike")
+DATA = os.path.join(CSTRIKE, "addons", "sourcemod", "data", "csai")
+REPLAYBOT = os.path.join(CSTRIKE, "addons", "sourcemod", "data", "replaybot", "0")
+
+def current_map(root):
+    """Which map is being trained. The daemon publishes this; default for old setups."""
+    f = os.path.join(root, "data", "map.txt")
+    try:
+        # utf-8-sig: PowerShell's Set-Content -Encoding utf8 writes a BOM, and
+        # Python reads it as part of the name. "﻿surf_demise" then matches
+        # no file, and the report says "no reference run found" for a map that
+        # has one.
+        with open(f, encoding="utf-8-sig") as fh:
+            name = fh.read().strip()
+            if name:
+                return name
+    except OSError:
+        pass
+    return "surf_demise"
+
+
+def human_reference(map_name):
+    """
+    The time to beat, taken from the states file the map's own replay produced.
+
+    It used to be the constant 39.10, which is this one map's number and would
+    have quietly mis-stated the target on every other map.
+    """
+    path = os.path.join(DATA, "%s_states.txt" % map_name)
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if line.startswith("#") and "clean_time=" in line:
+                    return float(line.split("clean_time=")[1].split()[0])
+                if not line.startswith("#"):
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0.0
+def track_units(map_name):
+    """
+    Track length, read from the map's own track file.
+
+    This was the constant 135547.0, which was already 305 units stale for
+    surf_demise itself and would be wrong by the whole difference on any other
+    map - silently rescaling every distance in the report.
+    """
+    path = os.path.join(DATA, "%s_track.txt" % map_name)
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if line.startswith("#") and "length=" in line:
+                    return float(line.split("length=")[1].split()[0])
+                if not line.startswith("#"):
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0.0
 
 
 def spark(vals, width=56):
@@ -60,10 +122,9 @@ def replay_table():
         from replayqa import analyse
     except ImportError:
         return []
-    cs = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
-    bots = sorted(glob.glob(os.path.join(cs, r"addons\sourcemod\data\csai\replays\*.replay")),
+    bots = sorted(glob.glob(os.path.join(DATA, "replays", "*.replay")),
                   key=os.path.getmtime, reverse=True)[:3]
-    human = os.path.join(cs, r"addons\sourcemod\data\replaybot\0\surf_demise.replay")
+    human = os.path.join(REPLAYBOT, "%s.replay" % MAP)
     rows = []
     for p in bots + ([human] if os.path.exists(human) else []):
         try:
@@ -71,9 +132,53 @@ def replay_table():
             if a:
                 a["is_human"] = (p == human)
                 rows.append(a)
-        except Exception:
-            pass
+            else:
+                rows.append({"name": os.path.basename(p), "error": "no frames read"})
+        except Exception as e:
+            # This used to be a bare pass. A replay that could not be parsed just
+            # vanished from the report, and if every one failed the section
+            # disappeared with no indication that anything had been attempted -
+            # which reads identically to "no replays yet".
+            rows.append({"name": os.path.basename(p),
+                         "error": "%s: %s" % (type(e).__name__, e)})
     return rows
+
+
+def eval_runs(limit_bytes=4000000):
+    """Every eval run the server has logged, as (finished, fraction, seconds).
+
+    The daemon evaluates every few minutes and each eval is eight runs from the
+    start of the map with a different recorded prestrafe. Over a night that is
+    hundreds of independent samples of the current policy, already on disk and
+    costing nothing to read. It is the only unbiased view of WHERE the runs that
+    fail actually end - the batch files cannot answer it, because the learner
+    deletes the ones it uses and what is left skews old.
+    """
+    path = os.path.join(CSTRIKE, "console.log")
+    out = []
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > limit_bytes:
+                fh.seek(size - limit_bytes)
+                fh.readline()
+            blob = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return out
+    # Each eval announces the policy generation it is testing. Without tracking
+    # that, a 120-run eval of an hour-old policy sits in the same pile as the
+    # current one and drags the rate down by a factor of ten.
+    cur = 0
+    for line in blob.splitlines():
+        h = re.search(r"eval: \d+ \w+ runs from state 0, policy gen (\d+)", line)
+        if h:
+            cur = int(h.group(1))
+            continue
+        m = re.search(r"eval run \d+/\d+: (\w+) at ([\d.]+)% in ([\d.]+)s", line)
+        if m:
+            out.append((cur, m.group(1).upper() == "FINISHED",
+                        float(m.group(2)), float(m.group(3))))
+    return out
 
 
 def build(log_path, out_dir):
@@ -86,7 +191,11 @@ def build(log_path, out_dir):
     A("")
     A("generated %s" % now.strftime("%Y-%m-%d %H:%M:%S"))
     A("")
-    A("Target: **surf_demise**, 66 tick. Human reference **%.2f s**, 100%% of track." % HUMAN_TIME)
+    if HUMAN_TIME > 0:
+        A("Target: **%s**, 66 tick. Human reference **%.2f s**, 100%% of track."
+          % (MAP, HUMAN_TIME))
+    else:
+        A("Target: **%s**, 66 tick. No reference run found for this map." % MAP)
     A("")
 
     if not rows:
@@ -101,10 +210,26 @@ def build(log_path, out_dir):
     eps = [int(r["episodes"]) for r in rows]
     fell = [int(r["fell"]) for r in rows]
     fin = [int(r["finished"]) for r in rows]
-    wall = float(rows[-1]["wall"])
+    # The wall column is seconds since the LEARNER started, and the learner is
+    # restarted whenever the daemon is. Reading the last row gave "wall time
+    # 1m 42s" for a run of 2900 generations, and a throughput of 1.2 million
+    # steps a second. Sum the per-generation deltas and treat a drop as a
+    # restart.
+    wall, prevw = 0.0, None
+    for r in rows:
+        try:
+            w = float(r["wall"])
+        except (ValueError, KeyError):
+            continue
+        if prevw is not None and w > prevw:
+            wall += w - prevw
+        prevw = w
 
-    # recent window vs the one before it: is it still improving?
-    w = max(len(gain) // 4, 5)
+    # Recent window against the one before it. Capped at 150 generations: a
+    # quarter of the history is 700 generations here, which spans several
+    # configuration changes and reports the average of two unrelated regimes as
+    # a trend.
+    w = min(max(len(gain) // 4, 5), 150)
     recent = sum(gain[-w:]) / min(w, len(gain))
     prior = sum(gain[-2 * w:-w]) / max(min(w, len(gain) - w), 1) if len(gain) > w else recent
     if recent > prior * 1.05:
@@ -113,6 +238,85 @@ def build(log_path, out_dir):
         trend = "**regressing** (%.2f%% -> %.2f%%)" % (prior, recent)
     else:
         trend = "**flat** (%.2f%% -> %.2f%%)" % (prior, recent)
+
+    # The headline number, which nothing in train_log.csv can express. Its
+    # `finished` column counts checkpoint-spawned episodes that only ever had
+    # ten seconds of track to cover, and `best_progress` pins at 1.0 the moment
+    # the bot can run the map at all and then never moves again. Both read
+    # healthy through a wall and flat through a breakthrough.
+    A("## Complete runs")
+    A("")
+    A("Episodes that began at the start of the map and reached the end. Counted")
+    A("by the learner, which sees every episode exactly once.")
+    A("")
+    fr = [r for r in rows if r.get("runs_from_start") not in (None, "")]
+    if fr:
+        fr_recent = fr[-40:]
+        fr_tot = sum(int(r["runs_from_start"]) for r in fr_recent)
+        fr_fin = sum(int(r["finished_from_start"]) for r in fr_recent)
+        fr_times = [float(r["best_full_run_s"]) for r in fr_recent
+                 if float(r.get("best_full_run_s") or 0) > 0]
+        A("| | |")
+        A("|---|---|")
+        A("| over the last %d generations | %d runs from the start, %d finished |"
+          % (len(fr_recent), fr_tot, fr_fin))
+        A("| finish rate | **%.0f%%** |" % (100.0 * fr_fin / fr_tot if fr_tot else 0))
+        if fr_times and HUMAN_TIME > 0:
+            A("| fastest complete run | **%.2f s** against the human's %.2f s (%+.1f%%) |"
+              % (min(fr_times), HUMAN_TIME, 100.0 * (min(fr_times) - HUMAN_TIME) / HUMAN_TIME))
+        A("")
+        A("| gen | runs | finished | rate | fastest |")
+        A("|---:|---:|---:|---:|---:|")
+        for r in fr[-10:]:
+            fr_n = int(r["runs_from_start"])
+            fr_f = int(r["finished_from_start"])
+            b = float(r.get("best_full_run_s") or 0)
+            A("| %s | %d | %d | %.0f%% | %s |"
+              % (r["gen"], fr_n, fr_f, 100.0 * fr_f / fr_n if fr_n else 0,
+                 ("%.2fs" % b) if b > 0 else "-"))
+        A("")
+    else:
+        A("Not recorded yet - this is logged from the generation after the learner")
+        A("was last restarted.")
+        A("")
+        A("Readings taken by sampling the batch files on disk are in")
+        A("`data/finish_log.csv`, but they run low: the learner deletes a batch as")
+        A("soon as it uses one, so what is left on disk is weighted towards")
+        A("batches that were too stale to use - which came from older policies.")
+        A("")
+
+    ev = eval_runs()
+    if ev:
+        newest = max(g for g, _, _, _ in ev)
+        ev = [e for e in ev if e[0] >= newest - 150]      # this policy, not an old one
+    if len(ev) >= 8:
+        fails = [f for _, ok, f, _ in ev if not ok]
+        wins = [t for _, ok, _, t in ev if ok]
+        gens = sorted(set(g for g, _, _, _ in ev))
+        A("## Where the runs that fail end")
+        A("")
+        A("From the daemon's own evaluations - %d runs across policy generations"
+          % len(ev))
+        A("%d to %d, each from the start of the map with one of the recorded"
+          % (gens[0], gens[-1]))
+        A("prestrafes.")
+        A("")
+        A("| | |")
+        A("|---|---|")
+        A("| finished | %d of %d (%.0f%%) |" % (len(wins), len(ev), 100.0 * len(wins) / len(ev)))
+        if wins:
+            A("| fastest | %.2f s |" % min(wins))
+        A("")
+        if fails:
+            buckets = {}
+            for f in fails:
+                buckets[min(int(f // 5) * 5, 95)] = buckets.get(min(int(f // 5) * 5, 95), 0) + 1
+            top = max(buckets.values())
+            A("```")
+            for b in sorted(buckets):
+                A("  %3d-%3d%%  %4d  %s" % (b, b + 5, buckets[b], "#" * int(40.0 * buckets[b] / top)))
+            A("```")
+            A("")
 
     A("## Summary")
     A("")
@@ -125,7 +329,8 @@ def build(log_path, out_dir):
     A("| throughput | %.0f steps/s end-to-end |" % (sum(steps) / wall if wall else 0))
     A("| best gain seen | %.2f%% of track (%.0f units) |" % (max(best), max(best) / 100 * TRACK_UNITS))
     A("| current gain | %.2f%% |" % gain[-1])
-    A("| entropy | %.3f (max %.3f = uniform) |" % (ent[-1], 2.303))
+    A("| entropy | %.3f (max %.3f = uniform over %d actions) |"
+      % (ent[-1], math.log(N_ACTIONS), N_ACTIONS))
     A("| completions | %d |" % sum(fin))
     A("| trend | %s |" % trend)
     A("")
@@ -162,6 +367,9 @@ def build(log_path, out_dir):
         A("| replay | secs | flips/s | phi in window | med speed |")
         A("|---|---:|---:|---:|---:|")
         for a in qa:
+            if a.get("error"):
+                A("| %s | could not be read | | | %s |" % (a["name"], a["error"]))
+                continue
             A("| %s%s | %.2f | %.2f | %.1f%% | %.0f |" % (
                 a["name"], " *(human)*" if a.get("is_human") else "",
                 a["secs"], a["flips_per_s"], a["phi_in_window"], a["speed_med"]))
@@ -181,6 +389,11 @@ def build(log_path, out_dir):
 
     return "\n".join(L)
 
+
+
+MAP = current_map(ROOT)
+HUMAN_TIME = human_reference(MAP)
+TRACK_UNITS = track_units(MAP)
 
 def main():
     ap = argparse.ArgumentParser()

@@ -32,7 +32,14 @@ function Test-Daemon {
          Where-Object { $_.CommandLine -like '*daemon.ps1*' -and $_.CommandLine -notlike '*-Stop*' }
     return [bool]$p
 }
-function Test-Actor  { [bool](Get-Process -Name 'srcds_win64' -ErrorAction SilentlyContinue) }
+function Count-Actors {
+    # Training actors specifically. "any srcds is running" was satisfied by an
+    # eval instance, and by actors that were alive but wedged - the panel read
+    # RUNNING for 90 minutes while nothing trained.
+    @(Get-CimInstance Win32_Process -Filter "Name='srcds_win64.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*csai_train_batches*' }).Count
+}
+function Test-Actor  { (Count-Actors) -gt 0 }
 function Test-Viewer {
     try { Invoke-WebRequest 'http://127.0.0.1:3000/' -UseBasicParsing -TimeoutSec 1 | Out-Null; return $true }
     catch { return $false }
@@ -162,8 +169,16 @@ function Show-Report {
 
 function Make-Replay {
     Write-Host '  running the current policy (takes a minute)...' -ForegroundColor Cyan
+    # Must match what the daemon trains and evaluates with. Without -FrameSkip
+    # this drove a frameskip-2 policy at eval.ps1's default of 6 (73% vs 8.5%),
+    # and without -Greedy 0 it used argmax, which is a different controller
+    # entirely (6% vs 32-63%). Both produced a plausible bad replay that landed
+    # in the same viewer list as the good ones.
+    $fs = 2
+    $mapFile = Join-Path $Root 'data\map.txt'
+    $map = if (Test-Path $mapFile) { (Get-Content $mapFile -Raw).Trim() } else { 'surf_demise' }
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root 'tools\eval.ps1') `
-        -Runs 1 -Timescale 20 -TimeoutSec 300
+        -Runs 1 -Timescale 20 -TimeoutSec 300 -FrameSkip $fs -Greedy 0 -Map $map
     Write-Host ''
     Write-Host '  done - open the viewer with [4] to watch it.' -ForegroundColor Green
     Read-Host '  enter to return' | Out-Null

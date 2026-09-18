@@ -204,9 +204,18 @@ stock void Rec_Human_Track(int client)
 {
 	if (client == g_iBot || IsFakeClient(client))
 		return;
-	if (g_iRecHumanClient != client)
-	{
-		g_iRecHumanClient = client;
-		Rec_Human_Reset();
-	}
+
+	// Claim the first real player and keep them. This used to adopt whichever
+	// client ticked last and reset the buffer on every change, so with two
+	// people on the server the count never got past 1 and !csai_save reported
+	// "nothing recorded yet" forever, with no hint why.
+	if (g_iRecHumanClient == client)
+		return;
+	if (g_iRecHumanClient > 0 && IsClientInGame(g_iRecHumanClient)
+	    && IsPlayerAlive(g_iRecHumanClient))
+		return;                       // someone else is already being recorded
+
+	g_iRecHumanClient = client;
+	Rec_Human_Reset();
+	PrintToServer("[CsAI] recording client %d", client);
 }

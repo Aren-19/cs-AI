@@ -76,6 +76,19 @@ already surfing rather than flailing around. Without that first step it learns t
 twitch left and right very fast, which scores well but looks nothing like real
 surfing.
 
+## Using it on another map
+
+Nothing in the bot knows about a particular map. Point it at one you have a
+recorded run for:
+
+```bash
+python tools/setup_map.py surf_dune
+```
+
+That works out the route, the restart points and the run to learn from, all from
+your replay. The bot starts from nothing on a new map, the same way it did on the
+first one.
+
 ## Teaching it with your own runs
 
 This is the most useful thing you can do for it.

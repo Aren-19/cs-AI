@@ -66,6 +66,41 @@ int   g_iDemoTrim   = 0;
 int   g_iDemoWrote  = 0;
 File  g_hDemoOut    = null;
 
+/**
+ * Does this recording's tickrate match the server's?
+ *
+ * Playback feeds one recorded tick per server tick, so a 100-tick recording on a
+ * 66-tick server holds every input 1.5x too long and reconstructs velocities
+ * 1.5x wrong - the bot flies a different line while capture pairs those
+ * observations with the human's actions. Nothing compared the two rates before;
+ * surf_dune's replay really is 100 tick.
+ *
+ * Re-time it with:  python tools/setup_map.py <map>
+ */
+stock bool Demo_TickrateOk(const char[] header)
+{
+	int at = StrContains(header, "tickrate=");
+	if (at == -1)
+		return true;                       // older file, nothing to check
+
+	char tmp[16];
+	int k = 0;
+	at += 9;
+	while (at + k < strlen(header) && header[at + k] != ' ' && k < 15)
+	{
+		tmp[k] = header[at + k];
+		k++;
+	}
+	tmp[k] = '\0';
+
+	float rec = StringToFloat(tmp);
+	if (rec <= 0.0)
+		return true;
+
+	float srv = 1.0 / GetTickInterval();
+	return (FloatAbs(rec - srv) / srv) < 0.01;
+}
+
 stock void Demo_Path(int i, char[] path, int maxlen)
 {
 	char map[PLATFORM_MAX_PATH];
@@ -161,6 +196,14 @@ stock bool Demo_LoadIndex(int which)
 			continue;
 		if (line[0] == '#')
 		{
+			if (!Demo_TickrateOk(line))
+			{
+				PrintToServer("[CsAI] demo: %s recorded at a different tickrate than this", path);
+				PrintToServer("[CsAI]   server - refusing it. Re-time: python tools/setup_map.py <map>");
+				delete f;
+				g_iDemoCount = 0;
+				return false;
+			}
 			if (StrContains(line, "preframes=") != -1)
 			{
 				int at = StrContains(line, "preframes=") + 10;
@@ -247,9 +290,8 @@ stock void Pre_BuildFromDemos()
 				shortest = g_iPreCountSet[i];
 		}
 		Pre_Select(g_iPreLongest);
-		PrintToServer("[CsAI] prestrafe: %d recorded set(s), %d..%d ticks (eval uses %d)",
-		              g_iPreSets, shortest, g_iPreCountSet[g_iPreLongest],
-		              g_iPreCountSet[g_iPreLongest]);
+		PrintToServer("[CsAI] prestrafe: %d recorded set(s), %d..%d ticks (eval cycles all of them)",
+		              g_iPreSets, shortest, g_iPreCountSet[g_iPreLongest]);
 	}
 }
 
@@ -401,6 +443,40 @@ stock bool Demo_Tick(int client, int &buttons, float movement[3], float angles[3
 	}
 
 	int idx = g_iDemoIndex;
+
+	// A recorded run can still jump: a staged map restarts the player at the
+	// next stage, and even the cleaned line is only contiguous within a segment.
+	// Replaying those ticks as ordinary input would fly the bot at a wall for a
+	// second and capture garbage, so resynchronise onto the recording instead.
+	if (idx > 0)
+	{
+		float dx = g_fDemoPos[idx][0] - g_fDemoPos[idx - 1][0];
+		float dy = g_fDemoPos[idx][1] - g_fDemoPos[idx - 1][1];
+		float dz = g_fDemoPos[idx][2] - g_fDemoPos[idx - 1][2];
+		if (SquareRoot(dx * dx + dy * dy + dz * dz) > 200.0)
+		{
+			float ang[3], vel[3];
+			ang[0] = g_fDemoAng[idx][0];
+			ang[1] = g_fDemoAng[idx][1];
+			ang[2] = 0.0;
+			// velocity from the next recorded tick, so the bot arrives moving as
+			// the human was rather than dropping from a standstill
+			float rate = 1.0 / GetTickInterval();
+			if (idx + 1 < g_iDemoCount)
+			{
+				vel[0] = (g_fDemoPos[idx + 1][0] - g_fDemoPos[idx][0]) * rate;
+				vel[1] = (g_fDemoPos[idx + 1][1] - g_fDemoPos[idx][1]) * rate;
+				vel[2] = (g_fDemoPos[idx + 1][2] - g_fDemoPos[idx][2]) * rate;
+			}
+			else
+			{
+				vel[0] = 0.0; vel[1] = 0.0; vel[2] = 0.0;
+			}
+			TeleportEntity(client, g_fDemoPos[idx], ang, vel);
+			g_iTrackHint = -1;          // full search: we are somewhere new
+		}
+	}
+
 
 	// capture at the policy's own decision cadence, and only over the timed part
 	if (idx >= g_iDemoPre && ((idx - g_iDemoPre) % g_iFrameSkip) == 0 && g_hDemoOut != null)

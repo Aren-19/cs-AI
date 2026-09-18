@@ -15,3 +15,5 @@ data/daemon.stop
 # web/run.ps1 clones them on demand; see web/README.md.
 web/offstyles-web/
 web/replay-viewer/
+data/*.prev
+data/map.txt

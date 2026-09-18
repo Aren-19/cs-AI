@@ -752,6 +752,181 @@ results - the tell that something was not connected. The encoding is now 1 = A,
 The lesson repeats from earlier today: when a deliberately varied input produces
 identical output, suspect the wiring before the physics.
 
+## Hardening pass, and what a second map exposed
+
+Three parallel audits (python tools, the plugin, the PowerShell orchestration)
+plus the first attempt to run a map the project had never seen.
+
+### Training was dead and everything said it was fine
+
+A checkpoint migration wrote `range(4)` for the value network, which has SIX
+tensors, so the critic's output layer was dropped. `learn.py --resume` died with
+`KeyError: v4` on every restart - 59 times over 90 minutes - while the panel
+reported RUNNING and the reports refreshed on schedule at a frozen generation.
+Six cores produced nothing.
+
+It was invisible because the learner's stdout and stderr went to a hidden console
+and were discarded, and because the daemon logged `learner started` from
+`Start-Process`, which returns before Python has parsed anything. A variable that
+looked like a stall watchdog, `$lastGen`, was assigned and never read.
+
+Fixed: learner output captured to `logs/learner.log`, the resume path validates
+the critic as well as the policy, and the watchdog is real. The class of lesson:
+**a log line that asserts success without checking it is worse than no log line.**
+
+### The centerline was drawn through teleports
+
+`clean_frames` concatenates the kept segments of a run; `centerline` then
+resampled that concatenation by raw inter-frame distance. On a staged map the
+gaps between segments became straight lines through nothing:
+
+| map | track length before | after | real path |
+|---|---:|---:|---:|
+| surf_demise | 135,242 | 135,247 | one segment, unaffected |
+| surf_dune | 110,277 | **61,216** | ~61,498 |
+
+44% of surf_dune's "track" was void, and since progress along this polyline IS
+the reward, crossing one teleport tick paid about 23,000 units at once - which
+would have dominated everything the policy learned. surf_demise is a single
+continuous segment, which is exactly why a year of work on it never showed this.
+
+Carrying the resampling overshoot (rather than zeroing it) also made spacing
+actually 64 units instead of a speed-dependent 90; surf_demise went to 2078
+points, past the old `MAX_TRACK` of 2048 - which used to `break` silently and set
+the track length to wherever it stopped, so the finish test fired mid-map and
+paid the completion bonus.
+
+### Recordings were never checked against the server tickrate
+
+Playback feeds one recorded tick per server tick. surf_dune's replay is 100 tick
+and this server is 66.67, so every input would be held 1.5x too long and every
+velocity reconstructed 1.5x wrong, while demo capture paired those observations
+with the human's actions. `replay.py` now re-times recordings to the server rate
+and both loaders refuse a file that disagrees.
+
+### Weights were committed before they were validated
+
+`Pol_Load` wrote each parsed float straight into the live arrays and only then
+checked the header and the count - returning false *after* corrupting them, while
+still reporting the OLD generation. The learner rewrites that file every
+generation and the plugin polls it four times a second. Now parsed into a scratch
+buffer and committed only when complete.
+
+### Smaller, same shape
+
+- `report.py` carried `TRACK_UNITS = 135547.0` (already 305 units stale for its
+  own map) and a reference time of 39.10 as constants; both now come from the
+  map's own files. Reported max entropy was ln(10) for a 17-action space.
+- `bc.py` bucketed the coast action as a left strafe, corrupting the side
+  accuracy and switch rate that cloning is judged on.
+- `unstick.py` carried a windowed search hint across checkpoints and across
+  episode boundaries in a dump: 81% of rows had wrong track positions, by up to
+  98 percentage points.
+- An eval flag was cleared in exactly one place, so stopping an eval part-way
+  made the *next* training run finish after one episode and report success.
+- `eval.ps1` ran on the default port, which is actor 0's.
+- The panel's "make a replay" drove a frameskip-2 policy at frameskip 6, with
+  argmax - two different controllers writing into one replay list.
+- `Viewer.bat` had never worked: `web
+un.ps1` was stored as `web<CR>un.ps1`.
+
+### Speed and smoothness became objectives
+
+Until now the reward was distance only. A full run earns about 1352 from
+progress and the finish bonus was 10 - 0.7% of the return - so two runs that both
+finished scored the same whether they took 39 s or 60 s. Nothing asked for speed,
+and nothing asked for technique beyond the switch cost. Left alone it would have
+plateaued at "completes the map" and stopped wanting anything.
+
+Added, all as flags:
+
+| term | value | why |
+|---|---|---|
+| time cost | 0.08 per decision | a tick spent is a tick paid. Kept well under the ~0.99 a decision earns from progress: a living cost larger than the progress it interrupts makes dying early the better move |
+| time bonus | 30 per second under the reference | paid only on runs that start at the beginning - a mid-map start has no comparable clock. Upside only, since the time cost already prices slowness |
+| trim cost | 0.05 per aim change | nothing priced fidgeting with the angle; that is most of what separated the bot's 0.45 deg median view movement from the human's 0.33 |
+| switch cost | 0.15 -> 0.40 | the human changes strafe key 0.95/s |
+
+The reference time is read from the map's own states file rather than a constant.
+
+## All eleven actors were running the same episodes
+
+Generations 2674-2677 were byte-identical - same steps, same return, same
+fell/finished/stuck - from four different actors. Every actor shares the policy's
+default RNG seed (0x1234567), and `+csai_seed` exists but the daemon never passed
+it, so any actors sitting on the same policy generation ran **exactly the same
+episodes**. Not only the first batch: a5, a6 and a7 produced identical
+batch_0002 as well. The learner then spent a separate PPO update on each copy.
+
+Each actor now gets its own seed, re-randomised per restart. With fewer actors
+and more timing jitter this was mostly hidden; at 11 actors it was most of the
+machine's output.
+
+## Watching for the next plateau without a human
+
+`tools/autofix.py` runs the earlier diagnosis on a timer: if best progress has not
+improved by 0.75 points over 150 generations, it stops training, runs
+`unstick.py`, and restarts. Validated against this project's own history rather
+than assumed - replaying the log, it reports PLATEAU at every check through the
+73% wall (gens 1600-2300) and "ok" during healthy progress (+12.5 points over the
+last 150). It backs up the checkpoint before each attempt, waits 45 minutes
+between them, stops after six, and halts if training does not come back up.
+
+## The wall moved to 88%
+
+| progress | human | bot |
+|---|---|---|
+| 80% | 4341 u/s | 3704 |
+| 87% | key D | key **A** |
+| 88% | z -961 | z -1495 |
+
+Same shape as the drop at 72%: a specific stretch where the policy commits to the
+wrong side, sinks below the line, and leaves the corridor at the 600-unit limit.
+The speed deficit is local, not general - median speed over a whole run is 3522
+against the human's 3589, about 2%.
+
+Technique is now close to human and better on the measure that matters most for
+speed: phi inside the acceleration window 98.5% against the human's 97.8%, p95
+view movement 2.44 deg against 2.21.
+
+## Evaluation was measuring one opening state, not the policy
+
+An automatic eval reported 6.9%, 6.0%, 7.1% while training reported mean gain
+55-60% and a best of 88%. That gap is not improvement or regression, it is two
+different measurements.
+
+Evaluation always used the LONGEST recorded prestrafe - one of the eight the
+policy trains against, chosen because it looks best in a replay. Training samples
+all eight. Running the same policy at the same moment, cycling the prestrafes by
+run index instead:
+
+| eval method | runs |
+|---|---|
+| always the longest | 6.9, 6.0, 7.1 |
+| cycling all eight | **88.4, 40.0, 40.0, 87.6, 87.9, 52.5, 88.4, 87.9** |
+
+So the number that has been used to judge every change today was describing a
+single opening state the policy happens to be bad at. The warning was already in
+this file: changing only which prestrafe an eval used once took the same policy
+from 72.4% to 11.3%, and that was recorded as evidence of brittleness rather than
+acted on as a flaw in the measurement.
+
+Evaluation now cycles the sets by run index - deterministic and reproducible, and
+covering the spread training actually faces.
+
+It also shows something real: five of the eight openings reach ~88%, three reach
+40-52%. That brittleness is worth attacking, and it was invisible while the eval
+reported a single number from a single state.
+
+**The lesson is the day's recurring one.** A metric that silently narrows its
+input reports confidently about something other than what you asked.
+
+## Standing lesson, reinforced
+
+Every one of these produced a plausible number or a green status rather than an
+error. The audits were worth more than the fixes: three of the worst were in code
+that had been read many times and looked right.
+
 ## Standing lesson
 
 Every real defect was in the agent's **interface to the game** — what
@@ -781,3 +956,409 @@ that leaked it — and both produced *better* offline metrics than the fix does
 expert's own trajectory cannot see the failure that matters, because the failure
 only exists once the policy is the one driving. The number that exposed it was
 behavioural, not statistical: side switches per second.
+
+## The bot finishes the map, and two metrics hid it
+
+At gen 2691 an episode starting at the beginning of surf_demise reached the end.
+By gen 2852 that was happening in 14 generations out of 52. The completed runs
+take 39.75 to 40.38 seconds against the human's 39.05 - a median of 2.2% slower.
+
+Nothing in the training log said so, because both of its progress columns are
+blind to it in opposite ways.
+
+`best_progress` is the share of the track an episode *gained*, so it stops at
+1.0 the moment the bot can run the map end to end. From then on it is pinned,
+and a watchdog reading it sees a permanent plateau. That is exactly what
+happened: autofix stopped training at gen 2842 reporting "best stuck at 99.97%
+for 150 generations" during the steepest improvement the run has ever had.
+
+`finished` counts every episode that reached the end, and 30% of episodes are
+spawned at a checkpoint three quarters of the way along. Those need ten seconds
+of track, not forty. The column read 4-5 finishes per generation for hundreds of
+generations before any episode ran the whole map.
+
+So the headline number had to be computed from the batch records instead, by
+filtering on `start_state == 0` - which is what tools/finishes.py now does, and
+what autofix now switches to watching once anything finishes.
+
+### Where the other 99% die
+
+Of 1037 runs from the start, 895 - 86% of every failure - end between 85% and
+90% of the track, centred on 87.8%. Everything else is noise. But the cause is
+not there. Comparing the 8 completed runs against 250 failures band by band:
+
+    band      speed win / fail     height vs the line, win / fail
+    60-65%      3858 / 3835
+    70-75%      3947 / 3909
+    75.0-75.5%  3859 / 3811          +16 / -101
+    76.0-76.5%  4114 / 3777           -8 /  -72
+    77.0-77.5%  4326 / 3766           -2 / +165
+    78.0-78.5%  4401 / 3763           +9 / +158
+    80-85%      4295 / 3701
+    87-88%      4294 / 3686          +67 / -481
+
+The two populations are identical to within 5 u/s until 60%, and differ by 620
+u/s by 78%. The whole gap opens in one 2.5% stretch: between 75.5% and 78% the
+winners gain 540 u/s and the failures gain nothing at all. They enter that ramp
+about 100 units below the line, catch it in the wrong place, and come out slow.
+
+After that the runs are already decided. Both populations hold a flat speed from
+79% onward - 4294 against 3686 - and the failures sink steadily below the line
+(-153, -259, -382, -481) until they leave the corridor at 87.8%. Nothing goes
+wrong at 87.8%; that is just where a run that was 600 u/s short since 78% runs
+out of height.
+
+This is the second time a fix has been aimed at the place a run visibly ends
+rather than the place it was lost. The first was the 72% drop, where the
+observable failure was real but three confident explanations of it were wrong.
+The lesson is the same both times: the band where runs end is the *last* place
+to look for the cause, because by then every run in the failing population
+already shares the same state.
+
+## Two missing braces stopped training for half an hour
+
+A guard added the same evening to stop a failed batch being announced as
+complete:
+
+    if (g_hBatchFile == null)
+        PrintToServer("[CsAI] could not open batch file %s", path);
+        // Train_EndOfBatch would still write a .done marker claiming N episodes
+        g_bBatchBroken = true;
+
+SourcePawn binds only the first statement to a braceless `if`, so
+`g_bBatchBroken = true` ran on *every* batch. `Train_WriteDoneMarker` returns
+early when that flag is set, so from the moment the rebuilt plugin loaded, no
+actor ever wrote a `.done` marker. The learner discovers work by scanning for
+`.done` files. It found none and waited.
+
+What that looked like from outside: eleven actors alive, each pinned at 100% of
+a core, writing well-formed `.bin` files. A learner process alive with an empty
+stderr. A daemon log showing eleven healthy actors. Nothing had crashed, so
+every liveness check in the system passed for twenty-eight minutes while the
+policy did not move a single generation.
+
+Three things were supposed to catch it and none did:
+
+  * the daemon's stall watchdog fired once at four minutes, wrote one line, and
+    never acted again. It now restarts everything after twelve minutes, at most
+    three times, and says so.
+  * the health probe allowed ten minutes without a generation. A generation takes
+    fifteen seconds. It now allows five.
+  * neither knew the failure's fingerprint. Both now count `.bin` files that have
+    waited over five minutes for a marker, which is the one signal that separates
+    "the learner has nothing to do" from "the learner cannot see the work".
+
+The 1440 episodes already written were not lost: the markers were reconstructed
+from the batch contents and the learner consumed them.
+
+A scan of every braceless `if`/`for`/`while` in the plugin found no other site
+with a second statement indented under it. That check is worth keeping in mind
+whenever a one-line guard grows a comment - the comment is what makes the extra
+statement look like it belongs.
+
+## The recorded runs disagree with the line the reward enforces
+
+An episode is killed the moment it is more than 600 units from the centerline.
+The centerline is built from exactly one recorded run. Nothing ever checked the
+other recorded runs against it - and checking them says this, for surf_demise:
+
+    demo    (the one cloning reads)  253 of 2734 ticks beyond 600, worst 2196
+    demo_2                           156 of 2940 ticks beyond 600, worst 1408
+    demo_3                           inside the corridor throughout, worst 470
+    demo_4  (the track's own source) inside by construction, 39.04 s
+    demo_6                           188 of 2875 ticks beyond 600, worst 1543
+    demo_8                           107 of 2892 ticks beyond 600, worst  880
+
+Four of the human's own runs spend one to three seconds outside the corridor
+their own reward enforces. The file cloning reads is the worst of them: through
+84-92% of the map it runs 800 to 1150 units from the track, which is a line the
+reward would terminate on sight. Cloning was being taught technique that the
+reward then punished, and both numbers looked fine on their own.
+
+Two things were checked before believing this. The nearest-point search agrees
+tick for tick with a full argmin, so it is not the windowed search drifting. And
+the track's own source run measures 0 units off across every band, so the
+centerline is faithful - it is the other runs that differ.
+
+Three of the eight contain a map teleport, a single tick that moves the player
+about 20,000 units. The windowed search looks 64 points ahead, roughly 4000
+units, so it cannot follow that jump and everything it reports afterwards is
+meaningless. A naive reading of those three gives a mean deviation of 9000
+units, which is not a line at all - it is the measurement failing. The check now
+says so instead of printing the number.
+
+This does not explain the runs that end at 87.8%: at that point the track's own
+source is on the line, the bot's completed runs are 71 units off it, and the
+ones that fail are 505 to 562 - under the limit, and already 600 u/s slow since
+78%. The corridor is killing runs that were lost long before. But it does mean
+the corridor is roughly half the width of the human's own run-to-run spread, so
+the bot is confined to reproducing one particular run rather than finding its
+own line.
+
+`setup_map.py --check` now reports all of this per run. It does not refuse to
+train, because the map trains perfectly well with these files on disk - they
+only matter when one is chosen to clone from, and then they matter a lot.
+
+## Most of the machine was being thrown away
+
+Eleven actors on twelve logical cores, all at AboveNormal priority, with the
+learner left at Normal. A finished batch arrived every 5 seconds; the learner
+took 14 to 15 seconds to consume one. Everything older than 12 generations is
+dropped as stale, so **55% of every episode the machine produced was discarded
+before it could be used.**
+
+The learner was slow because it was losing every scheduling contest it entered.
+Its OpenBLAS threads had no cores to run on, because eleven game servers at a
+higher priority had all of them. Matching the learner's priority to the actors'
+is a one-line change and it is most of the fix:
+
+    config                                     steps/hour   gens/hour   wasted
+    11 actors, batch 96, learner Normal            19.8M         235       55%
+     6 actors, batch 64, learner AboveNormal       44.3M         715        0%
+
+2.2x the learning throughput on half the machine, and nothing thrown away at
+all - six actors produce very close to what the learner can take. Both windows
+are single-configuration samples, 200 generations and 65 generations.
+
+So the maximum power level is not the fastest setting - it is less than half
+the speed of one that uses six actors instead of eleven. The actors were never the
+bottleneck; they were already producing more than twice what could be used, and
+adding more of them only took cores away from the one process that was.
+
+Six actors also lands near the balance point: they produce about 37,000 episodes
+an hour and the learner now consumes about 39,000, so almost nothing is wasted
+and half the machine is free.
+
+The remaining bottleneck is the PPO update itself - a pure numpy implementation,
+about 11 seconds per 100,000 steps. That is now the thing to make faster, and
+nothing about actor count or game settings will move it.
+
+Worth noting what this looked like before it was measured: the run was set to
+MAX because more actors obviously means more data, CPU usage sat at 55-60% and
+looked like headroom, and every dashboard read healthy. The waste was only
+visible in a line the learner printed and nothing aggregated - "skip
+a3_batch_0047: policy gen 2835 is 13 behind" - once for every other batch, all
+night.
+
+## Measuring the finish rate off the disk understates it
+
+`finishes.py` answers the headline question - how often does a run that started
+at the beginning reach the end - by reading the batch files present in the out
+directory. Three readings taken within twenty minutes gave 0.8%, 20.0% and
+67.9%, on a policy that was improving but nothing like that fast.
+
+The sample is biased, and biased downward. The learner deletes a batch as soon
+as it has used one, so a batch sitting on disk is either still being written or
+was passed over. The ones passed over are the ones dropped as stale - produced
+by a policy twelve or more generations old. At 55% stale that was most of what
+was ever there to read, and all of it came from older, worse policies.
+
+The count now comes from the learner, which sees every episode exactly once,
+and is written to `train_log.csv` as `runs_from_start`, `finished_from_start`
+and `best_full_run_s`. Over gens 3018-3024, on 308 runs from the start of the
+map: **69% finished**, fastest 39.66 s against the human's 39.05 s.
+
+That is the fourth measurement error in this project with the same shape. The
+eval that always used the longest prestrafe, the eval that ran at a different
+frameskip than training, `best_progress` pinning at 1.0, and now this: in every
+case the number was computed over a population that was not the one being asked
+about, and in every case it looked entirely plausible. None of them produced an
+error, a warning, or an implausible value - which is why each survived for days.
+
+## The time bonus has never paid out once
+
+Now that runs finish, the remaining objective is the clock: 39.66 s against the
+human's 39.045 s. But the reward that was built for exactly this pays nothing:
+
+    float under = g_fRefTime - secs;
+    if (under > 0.0)
+        terminal += g_fTimeBonus * under;      // g_fTimeBonus = 30.0
+
+It is one-sided. It rewards beating the human and is silent about everything
+else, and the bot has never beaten the human, so this term has contributed
+exactly zero to every episode it has ever run. Two finishes, one at 39.7 s and
+one at 45 s, receive an identical terminal reward of 10.0.
+
+The only pressure toward speed is `g_fTimeCost`, charged at 0.08 per decision -
+about 2.67 per second of episode. The bonus, if it were two-sided, would be 30
+per second. So the gradient toward a faster run is roughly eleven times weaker
+than intended, and has been the whole time.
+
+Not changed yet, deliberately. Making it two-sided is an eleven-fold change to
+the dominant terminal reward, and the obvious failure mode is a policy that
+trades finishing for speed - which would undo the thing that just started
+working. It wants a controlled comparison against a held checkpoint, not an
+unattended overnight switch.
+
+## Making the time bonus two-sided (gen 3625 onward)
+
+Six hundred generations of evidence that the clock was not being optimised:
+
+    gens        runs   finished   rate    fastest in the block
+    3000-3099   3689    2628      71%     39.568s
+    3100-3199   4430    3343      75%     39.568s
+    3200-3299   4428    3468      78%     39.568s
+    3300-3399   4415    3544      80%     39.478s
+    3400-3499   4436    3663      83%     39.508s
+    3500-3599   4437    3626      82%     39.478s
+
+The finish rate climbed eleven points. The fastest run moved 0.09 s and then
+stopped: 39.478 s at gen 3324, not beaten in the 300 generations after it. The
+policy did exactly what it was asked - the reward paid for finishing and said
+nothing whatsoever about the clock until the bot was already beating a human,
+which it never was.
+
+The change is not just removing the `if (under > 0.0)`. At 30 per second, a
+finish one second slow would score 10 - 30 = -20 against a fall's -1, and the
+policy would be right to conclude that falling is better than finishing slowly.
+The original comment anticipated this ("charging for it twice would push toward
+giving up") and drew the wrong conclusion from it - it dropped the downside
+rather than bounding it.
+
+So: base 50 rather than 10, two-sided at 30 a second, floored at 5.
+
+    finish at 39.045 s (the reference)   50.0
+    finish at 39.478 s (the best so far) 37.0
+    finish at 39.700 s (typical)         30.3
+    finish at 40.500 s                    6.3
+    finish at 41.000 s or slower          5.0   (the floor)
+    fell or stuck                        -1.0
+
+Every finish outscores every fall no matter how slow, and the gradient stays
+live from 39.045 s out to 40.545 s, which covers every time any run has ever
+recorded. The plugin now prints this table at startup against its own loaded
+reference time, because a reward you cannot read back is one you are guessing
+at - and the first version of that very print was wrong (SourcePawn's
+PrintToServer does not take the `%+.1f` flag; it printed the spec literally and
+shifted every argument after it, reporting the floor as 30 and the time cost as
+5).
+
+Two other things changed with it. The KL anchor pointed at the behaviour clone -
+gen 1, cloned from the one recorded run that spends 253 ticks outside the
+deviation limit - and had been pulling an 82% policy back towards it for
+thousands of generations. It now points at the gen 3625 policy: the term exists
+to prevent collapse, not to preserve the clone. And `tools/compare.sh` reports
+the run against the 225 settled generations before the change, with the watch
+loop restoring the baseline checkpoint on its own if the finish rate drops under
+65% across 60 generations.
+
+## Learning the opening (gen 8858 onward)
+
+By gen 8800 the run had converged and stopped improving: the fastest run was
+39.178 s at gen 6217 and 2400 generations after it nothing had beaten it. Three
+measurements say why, and none of them is the route.
+
+**The policy is deterministic and the map is deterministic.** Forty greedy runs,
+five per recorded opening:
+
+    opening   runs   finished   time
+    set 0        5       5      39.55s
+    set 1        5       5      40.20s
+    set 2        5       5      39.52s
+    set 3        5       0      fell at 28.7%, every time
+    set 4        5       5      39.52s
+    set 5        5       5      39.71s
+    set 6        5       5      39.64s
+    set 7        5       5      39.62s
+
+Within an opening all five runs agree tick for tick. Every bit of variation in
+finish time comes from which of the eight recorded wind-ups was drawn - 0.68 s
+between the best and the worst that finishes, and one that fails outright.
+
+**The difference between a fast run and a slow one is spread evenly.** Comparing
+the fastest quartile of completed runs against the slowest, tenth by tenth: 20 to
+40 u/s everywhere, no section where the fast ones win. That is execution noise,
+not route knowledge.
+
+**The route constraint is not binding.** The deviation cost is 16.5 against an
+episode return of 1196 - 1.4%. Completed runs sit 64 to 70 units from a 600 unit
+corridor and never exceed 486. And the correlation between finish time and
+distance from the centerline is +0.15: the faster runs are marginally *closer* to
+the human's line, not further from it. Removing the route to let the policy
+invent its own would not release anything - and the centerline is also the
+progress reward and 21 of the 39 numbers the observation carries, so removing it
+takes away the dense learning signal and most of what the bot can see.
+
+So the opening is the thing nothing was optimising, and it is now the policy's.
+
+`+csai_prelearn N` hands it the last N ticks of the wind-up. That phase needs a
+different interpretation of the same 17 actions, because the ground is not the
+air:
+
+  * forward is held with the strafe key, so wishdir is the diagonal between them
+    and sits 45 degrees off the view, not the 90 that sidemove alone gives
+  * no jump - bunnyhopping through a wind-up throws away the ground speed it
+    exists to build
+  * the trim ladder spans 0 to 2 degrees, right at 4000 u/s and far too fine at
+    280, so it is multiplied by 20 here and spans 70 to 130 degrees instead
+
+No observation change was needed: speed alone separates the two phases, 0.28
+against 4.0, and the checkpoint stays loadable.
+
+Three things had to be kept honest. The wind-up makes no track progress by
+design, so the no-progress cutoff and the stuck test both had to be suppressed
+during it or the episode dies before the run starts. And the reported time
+subtracts the wind-up ticks - left in, every time would have quietly grown by the
+length of the wind-up and stopped being comparable to the human's 39.045 s.
+
+Rolled out as a curriculum, because the states at the start of a wind-up are ones
+the policy has never seen in 8800 generations. It gets 8 ticks first, near the
+handover it already knows, and `tools/curriculum.sh` gives it 8 more each time
+the finish rate comes back above 88%, up to 64. Below 55% it restores the gen
+8858 checkpoint and stops.
+
+One thing this cannot do much about: at gamma 0.997 and frameskip 2 the horizon
+is 333 decisions, about ten seconds. The finish is roughly 1300 decisions after
+the opening, so the time bonus reaches back to it at 2% strength. What actually
+shapes the wind-up is the progress reward over the following ten seconds - a
+reasonable proxy for a good entry, but it is a proxy.
+
+### The baseline to beat, measured properly
+
+Sampled and deterministic times are not comparable, and "fastest ever" is a tail
+statistic that the entropy anneal shrinks on purpose. So the reference point for
+everything after gen 8858 is a deterministic eval of that checkpoint, eight runs,
+one per recorded opening:
+
+    39.43  39.47  39.52  39.59  39.67  39.71  39.75  40.25      8/8 finished
+    median 39.63 s, best 39.43 s, against the human's 39.045 s
+
+`median_full_run_s` is now logged per generation alongside the best, because
+judged on the best alone a policy that gets sharper and more consistent reads as
+a regression.
+
+## The checkpoint window meant something other than it said
+
+`-StateLo` / `-StateHi` select which checkpoints a mixed start can spawn at, as a
+fraction. Of what was never checked. The states file writes
+
+    "frac": i / float(n - 1)
+
+where `i` is the frame index - so it is how far through the run in TIME, and it
+was being compared against numbers everyone read as a position on the track. The
+run is much slower at the start than the end, so the two diverge by up to eleven
+points:
+
+    stored frac (time)   true track fraction
+        0.6956                 0.6121
+        0.7390                 0.6632
+        0.7825                 0.7154
+        0.8259                 0.7691
+
+Every window ever passed therefore sat about seven points earlier on the map than
+whoever typed it intended - including the one chosen specifically to straddle the
+75.5-78% stretch where completed runs and failed ones diverge, which actually
+covered 61-72% and only just reached it.
+
+The plugin now resolves each checkpoint against the track at load and prints the
+range, so the parameter means what it says. The defaults and the curriculum's
+arguments were converted at the same time (0.68-0.79 becomes 0.61-0.72, the
+explicit 0.73-0.83 becomes 0.66-0.77) so exactly the same three checkpoints are
+selected as before: a labelling fix, not a behavioural one, deliberately kept
+separate from the experiment running over it.
+
+It has to be a full scan rather than the windowed search. These are isolated
+points with no prior hint, and surf_demise teleports 2.5 s in - roughly 19,000
+units, far past the 64 points the window looks ahead. Chained from the previous
+checkpoint the last five read 1,120 to 14,616 units off a line they are sitting
+exactly on, which is how the teleport first showed up at all.

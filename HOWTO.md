@@ -101,6 +101,34 @@ To switch, set `'+csai_states', '0'` in `tools/daemon.ps1` (1 = always the start
 `docs/experiments.md`, which measured progress from a random checkpoint. The
 honest end-to-end number is the eval line in the report.
 
+## Using a different map
+
+One command turns a recorded run into everything the bot needs:
+
+```bash
+python tools/setup_map.py surf_dune
+```
+
+It finds your timer's replay for that map, derives the reference line, the
+restart checkpoints, the prestrafe and the run to clone from, then checks the
+result and tells you if anything is wrong. Nothing about the bot is tied to a
+particular map - only the trained weights are, and those start from scratch.
+
+```bash
+python tools/setup_map.py surf_dune --check    # just validate what is there
+```
+
+Then train it:
+
+```bash
+.	ools\daemon.ps1 -Power high -Map surf_dune
+```
+
+A note on maps with stages: if your run contains failed attempts that reset you
+to a stage start, those are detected and dropped, and the teleport between
+stages is not counted as distance travelled. Getting that wrong would pay the
+bot an enormous one-tick reward for being teleported.
+
 ## Recording your own runs
 
 This is the most useful thing you can do for the bot right now.

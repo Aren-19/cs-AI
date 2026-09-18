@@ -20,7 +20,16 @@
 #endif
 #define _csai_track_included
 
-#define MAX_TRACK       2048
+/**
+ * Room for a long map, and a loud failure rather than a quiet one if exceeded.
+ *
+ * Measured: surf_demise 1474 points, surf_dune 890. At demise's ~92 units per
+ * point, 2048 points was only about 188k units - roughly 40% of headroom. Going
+ * over used to `break` silently, which set the track length to the arc length of
+ * the last point that fit, and the finish test (s >= length - 96) then declared
+ * EP_FINISHED partway through the map and paid the completion bonus.
+ */
+#define MAX_TRACK       16384
 
 /**
  * Lookahead points are spaced LOGARITHMICALLY, not uniformly.
@@ -79,6 +88,7 @@
 #define OBS_DIM         (7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM)
 
 int g_iLookOffsets[LOOKAHEAD] = {4, 8, 16, 32, 64, 128, 256};
+bool g_bTrackTruncated = false;   // the file had more points than MAX_TRACK
 
 float g_fTrackX[MAX_TRACK];
 float g_fTrackY[MAX_TRACK];
@@ -119,7 +129,10 @@ stock void Track_Load()
 		if (line[0] == '\0' || line[0] == '#')
 			continue;
 		if (g_iTrackCount >= MAX_TRACK)
+		{
+			g_bTrackTruncated = true;
 			break;
+		}
 
 		int n = ExplodeString(line, " ", parts, sizeof(parts), sizeof(parts[]));
 		if (n < 5)
@@ -138,6 +151,15 @@ stock void Track_Load()
 		g_fTrackLength = g_fTrackS[g_iTrackCount - 1];
 
 	PrintToServer("[CsAI] track: %d points, %.0f units", g_iTrackCount, g_fTrackLength);
+	if (g_bTrackTruncated)
+	{
+		// Loud, because the consequence is a finish line in the middle of the map.
+		PrintToServer("[CsAI] ####################################################");
+		PrintToServer("[CsAI] TRACK TRUNCATED at %d points - this map is longer than", MAX_TRACK);
+		PrintToServer("[CsAI] the build allows. Episodes will report FINISHED partway");
+		PrintToServer("[CsAI] through. Raise MAX_TRACK and rebuild before training.");
+		PrintToServer("[CsAI] ####################################################");
+	}
 }
 
 static stock float Sq(float v) { return v * v; }

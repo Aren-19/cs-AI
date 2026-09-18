@@ -134,6 +134,7 @@ int   g_iEpOutcome     = EP_RUNNING;
 int   g_iEpTick        = 0;
 int   g_iEpSteps       = 0;
 bool  g_bEpCoast       = false;   // this decision presses no strafe key
+bool  g_bBatchBroken   = false;   // this batch's file could not be opened
 
 /**
  * Override the policy's strafe side, for diagnosis only.
@@ -186,7 +187,57 @@ int   g_iEpNoProgMax   = 200;      // ticks without advancing before we give up
  * side switches as >90 deg view jumps and therefore reported 0.00/s for every
  * replay, the human's included. The metric was wrong, not the policy.)
  */
-float g_fSwitchCost    = 0.15;
+float g_fSwitchCost    = 0.40;
+
+/**
+ * Making it fast, and making it look human.
+ *
+ * The reward was distance only, so two runs that both finish scored the same
+ * whether they took 39 s or 60 s - the finish bonus of 10 is 0.7% of the ~1352
+ * a full run earns from progress. Nothing asked for speed, and nothing asked for
+ * technique beyond the switch cost.
+ *
+ * TIME COST: charged every decision, so a tick spent is a tick paid. Kept well
+ * below the ~0.99 a decision earns from progress at surf speed, because a living
+ * cost larger than the progress it interrupts makes dying early the better move.
+ *
+ * TIME BONUS: paid on finishing, scaled against the human's reference, and only
+ * for runs that started at the beginning - a mid-map start has no comparable
+ * clock.
+ *
+ * This was upside only, on the reasoning that being slow is already priced by
+ * the time cost and charging twice would push toward giving up. The first half
+ * was wrong by a factor of eleven: the time cost is 0.08 a decision, about 2.67
+ * a second, against this term's 30. So the reward said nothing at all about the
+ * clock until the bot was already beating the human - and it never was. Measured
+ * over 600 generations: the finish rate climbed 72% to 82% and the fastest run
+ * did not move once, sitting at 39.478 s against a 39.045 s reference for the
+ * last 300 of them. A reward that pays nothing until the problem is solved
+ * cannot help solve it.
+ *
+ * The second half of the reasoning was right, and is what the floor is for. Two
+ * sided at 30 a second, a finish one second slow would score -20 against a
+ * fall's -1, and the policy would correctly learn that falling is better than
+ * finishing slowly. So: a larger base, and a floor under it, chosen so that the
+ * gradient stays live across the whole range runs actually land in (39.0 to
+ * 40.6 s) and every finish outscores every fall no matter how slow.
+ *
+ *     finish at 39.045 s (the reference)   50.0
+ *     finish at 39.478 s (the best so far) 37.0
+ *     finish at 39.700 s (typical)         30.3
+ *     finish at 40.500 s                    6.3
+ *     finish at 41.000 s or slower          5.0   (the floor)
+ *     fell or stuck                         -1.0
+ *
+ * TRIM COST: changing the aim angle between decisions. The switch cost priced
+ * changing SIDE and nothing priced fidgeting with the angle, which is most of
+ * what separates the bot's 0.45 deg median view movement from the human's 0.33.
+ */
+float g_fTimeCost      = 0.08;    // per decision
+float g_fTimeBonus     = 30.0;    // per second against the reference, on finishing
+float g_fFinishBonus   = 50.0;    // base for finishing at all; was hardcoded at 10.0
+float g_fFinishFloor   =  5.0;    // a finish never scores below this, however slow
+float g_fTrimCost      = 0.05;    // per change of trim between decisions
 float g_fStartMaxFrac  = 0.90;     // never start so near the end that we finish instantly
 
 ArrayList g_hEpBuf = null;
@@ -198,6 +249,20 @@ float g_fEpPendVel[3];
 float g_fEpPendProbe[PROBE_DIM];
 float g_fEpPendWish = 90.0;
 float g_fEpWishAngle = 90.0;   // = side * (90 + trim)
+
+// The learned wind-up. g_iEpPreTicks of the episode belong to it; during those
+// the bot is on the ground with forward held and none of the run's termination
+// tests apply, because it has not started the run yet.
+bool  g_bEpGround   = false;
+int   g_iEpPreTicks = 0;
+
+/**
+ * The trim ladder spans 0 to 2 degrees, which is the right resolution in the air
+ * at 4000 u/s and far too fine on the ground at 280. Multiplied by this during
+ * the wind-up it spans 70 to 130 degrees of wishdir against velocity, which
+ * covers leading the turn and trailing it.
+ */
+#define PRE_TRIM_SCALE 20.0
 int   g_iEpSide = 1;           // sticky: only action 1 changes it
 int   g_iEpTrim = 0;
 
@@ -232,8 +297,23 @@ stock void Ep_OpenBatch()
 
 	delete g_hBatchFile;
 	g_hBatchFile = OpenFile(path, "wb");
+
+	// Braces matter here. Without them only the PrintToServer belonged to the
+	// if, and g_bBatchBroken was set on every single batch - so no actor ever
+	// wrote a .done marker, the learner never saw a batch to train on, and
+	// eleven actors ran flat out for half an hour producing nothing. The panel
+	// showed RUNNING throughout, because everything except the learning was.
 	if (g_hBatchFile == null)
+	{
 		PrintToServer("[CsAI] could not open batch file %s", path);
+		// Train_WriteDoneMarker would otherwise announce N episodes with no
+		// data behind them.
+		g_bBatchBroken = true;
+	}
+	else
+	{
+		g_bBatchBroken = false;
+	}
 
 	g_iBatchEpisodes = 0;
 	g_fStatReturnSum = 0.0;
@@ -394,6 +474,38 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 	 * the recorded replay watchable instead of a spinning blur.
 	 */
 	bool useLeft = (g_fEpWishAngle > 0.0);
+
+	/**
+	 * The wind-up, driven by the policy rather than the recording.
+	 *
+	 * Forward is held with the strafe key, so wishdir is the diagonal between
+	 * them - 45 degrees off the view, not the 90 that sidemove alone gives. Get
+	 * that offset wrong and the bot aims a quarter turn away from where it means
+	 * to, which looks like a policy that cannot prestrafe rather than a bug.
+	 *
+	 * No jump: bunnyhopping through a wind-up throws away exactly the ground
+	 * speed it exists to build.
+	 */
+	if (g_bEpGround)
+	{
+		// Pol_WishAngle takes a trim INDEX and looks its value up; the scale has
+		// to be applied to the value, not the index.
+		float phi = float(g_iEpSide) * (90.0 + Pol_TrimValue(g_iEpTrim) * PRE_TRIM_SCALE);
+		useLeft = (phi > 0.0);
+		float gYaw = velYaw + phi + (useLeft ? -45.0 : 45.0);
+		while (gYaw >  180.0) gYaw -= 360.0;
+		while (gYaw < -180.0) gYaw += 360.0;
+
+		angles[0] = 0.0;
+		angles[1] = gYaw;
+		angles[2] = 0.0;
+		movement[0] = 450.0;
+		movement[1] = useLeft ? -450.0 : 450.0;
+		movement[2] = 0.0;
+		buttons = (useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_FORWARD;
+		return;
+	}
+
 	float viewYaw = velYaw + g_fEpWishAngle + (useLeft ? -90.0 : 90.0);
 	while (viewYaw >  180.0) viewYaw -= 360.0;
 	while (viewYaw < -180.0) viewYaw += 360.0;
@@ -442,7 +554,24 @@ stock void Ep_Finish(int outcome)
 	// terminal reward folded into the last recorded step
 	float terminal = 0.0;
 	if (outcome == EP_FINISHED)
-		terminal = 10.0;
+	{
+		terminal = g_fFinishBonus;
+		// Only a run from the start has a clock comparable to the human's.
+		if (g_iEpStartState == 0 && g_fRefTime > 0.0)
+		{
+			// Minus the wind-up: those ticks are the policy's now, but they are
+			// still before the run starts, and the reference time they are being
+			// compared against does not include them. Left in, every reported
+			// time would silently grow by the length of the wind-up.
+			float secs = float(g_iEpTick - g_iEpPreTicks) * GetTickInterval();
+			terminal += g_fTimeBonus * (g_fRefTime - secs);
+
+			// The floor is not cosmetic. Without it a finish a second slow
+			// scores below a fall, and giving up becomes the better move.
+			if (terminal < g_fFinishFloor)
+				terminal = g_fFinishFloor;
+		}
+	}
 	else if (outcome == EP_FELL || outcome == EP_STUCK)
 		terminal = -1.0;
 
@@ -510,6 +639,16 @@ stock void Ep_Begin()
 /** Establish the episode baseline from wherever the bot currently is. */
 stock void Ep_Reset()
 {
+	// Ep_Begin reaches here even when both Pre_Begin and ApplyStateQuiet bailed
+	// out on an invalid client, and the bot can be kicked between batches.
+	if (g_iBot == -1 || !IsClientInGame(g_iBot))
+	{
+		PrintToServer("[CsAI] episode reset with no bot - aborting the run");
+		g_bTraining = false;
+		g_bEval = false;
+		return;
+	}
+
 
 	float pos[3], vel[3];
 	GetClientAbsOrigin(g_iBot, pos);
@@ -531,6 +670,8 @@ stock void Ep_Reset()
 	g_iEpOutcome    = EP_RUNNING;
 	g_iEpStuckTicks = 0;
 	g_iEpNoProgress = 0;
+	g_iEpPreTicks   = 0;
+	g_bEpGround     = false;
 	g_fEpStepReward = 0.0;
 	// start from the speed-optimal perpendicular angle rather than an arbitrary one
 	g_iEpSide = 1;
@@ -548,7 +689,17 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 {
 	if (g_bPreActive)
 	{
-		if (Pre_Tick(buttons, movement, angles))
+		// Hand over early: the last g_iPreLearned ticks of the wind-up are the
+		// policy's. Ep_Reset here rather than at the end of the recording, so the
+		// progress baseline and the step records start where control does.
+		if (g_iPreLearned > 0 && g_iPreIndex >= g_iPreCount - g_iPreLearned)
+		{
+			g_bPreActive = false;
+			Ep_Reset();
+			g_iEpPreTicks = g_iPreCount - g_iPreIndex;
+			g_bEpGround   = true;
+		}
+		else if (Pre_Tick(buttons, movement, angles))
 		{
 			// Record it so the saved replay contains the whole run. It is still
 			// not a training step - no observation, no action, no reward.
@@ -561,6 +712,9 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		}
 		Ep_Reset();                      // handover: the baseline starts here
 	}
+
+	// Still winding up? None of the run's bookkeeping applies until it ends.
+	g_bEpGround = (g_iEpTick < g_iEpPreTicks);
 
 	float pos[3], vel[3];
 	GetClientAbsOrigin(client, pos);
@@ -575,8 +729,11 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		g_fEpBestS = s;
 		g_iEpNoProgress = 0;
 	}
-	else
+	else if (!g_bEpGround)
 	{
+		// A wind-up makes no track progress by design - that is what it is. Left
+		// counting, it trips the no-progress cutoff and kills the episode before
+		// the run has started.
 		g_iEpNoProgress++;
 	}
 
@@ -642,6 +799,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		else
 		{
 			int prevSide = g_iEpSide;
+			int prevTrim = g_iEpTrim;
 			g_bEpCoast = (g_iEpAction == POL_COAST);
 			Pol_ApplyAction(g_iEpAction, g_iEpSide, g_iEpTrim);
 			if (g_iForceSide != 0)
@@ -653,6 +811,8 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
 			if (g_iEpSide != prevSide)
 				g_fEpStepReward -= g_fSwitchCost;
+			else if (g_iEpTrim != prevTrim)
+				g_fEpStepReward -= g_fTrimCost;
 		}
 		while (g_fEpWishAngle >  180.0) g_fEpWishAngle -= 360.0;
 		while (g_fEpWishAngle < -180.0) g_fEpWishAngle += 360.0;
@@ -670,6 +830,10 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	g_fEpLastS = s;
 	g_fEpStepReward += dS / 100.0;
 
+	// Every decision costs time.
+	if ((g_iEpTick % g_iFrameSkip) == 0)
+		g_fEpStepReward -= g_fTimeCost;
+
 	if (g_fDeviationCost > 0.0 && g_fMaxDeviation > 0.0)
 	{
 		float off = dist / g_fMaxDeviation;
@@ -682,23 +846,34 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	// Capture the frame AFTER the action is decoded, so the recorded view angle
 	// is the one the bot actually used this tick.
 	if (g_bEval)
+	{
 		Rec_Tick(client, buttons);
+		// The wind-up is the policy's to drive now, but it is still pre-timer as
+		// far as a replay is concerned - counted as run frames instead, the
+		// scrubber would show a time the run did not take.
+		if (g_bEpGround)
+			g_iRecPreFrames++;
+	}
 
 	g_iEpTick++;
 
 	float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
-	if (speed < 40.0 && (GetEntityFlags(client) & FL_ONGROUND))
+	// A wind-up starts slow and on the ground, which is the exact signature this
+	// test calls stuck.
+	if (speed < 40.0 && (GetEntityFlags(client) & FL_ONGROUND) && !g_bEpGround)
 		g_iEpStuckTicks++;
-	else
+	else if (!g_bEpGround)
 		g_iEpStuckTicks = 0;
 
-	if (g_fTrackLength > 0.0 && s >= g_fTrackLength - 96.0)
+	// Not on a truncated track: its "end" is wherever the point limit cut it off,
+	// so this test would award a completion bonus mid-map.
+	if (!g_bEpGround && !g_bTrackTruncated && g_fTrackLength > 0.0 && s >= g_fTrackLength - 96.0)
 	{
 		Ep_PushStep();
 		Ep_Finish(EP_FINISHED);
 		return false;
 	}
-	if (dist > g_fMaxDeviation)
+	if (!g_bEpGround && dist > g_fMaxDeviation)
 	{
 		Ep_PushStep();
 		Ep_Finish(EP_FELL);

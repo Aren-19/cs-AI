@@ -27,7 +27,7 @@ import numpy as np
 
 from ppo import Policy, Value, Adam, compute_gae, ppo_update, write_weights, POL_TOTAL
 from rollout import (Track, read_batch, episode_obs, load_state_arclengths,
-                     OUTCOME_NAMES, OBS_DIM, N_ACTIONS)
+                     OUTCOME_NAMES, OBS_DIM, N_ACTIONS, EP_FINISHED)
 
 CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
 DATA    = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
@@ -107,6 +107,16 @@ def main():
                          "shorter than an episode; 0.997 gives ~10s")
     ap.add_argument("--lam", type=float, default=0.95)
     ap.add_argument("--clip", type=float, default=0.2)
+    ap.add_argument("--ent-final", dest="ent_final", type=float, default=None,
+                    help="anneal the entropy bonus linearly to this over --ent-anneal "
+                         "generations. Exploration is worth paying for while the policy "
+                         "still has somewhere to go; once it has converged on a route "
+                         "the same bonus is just noise in the execution. Measured at "
+                         "gen 8800: every run-to-run difference in finish time came "
+                         "from the opening, not from the sampling - the deterministic "
+                         "policy repeats a run tick for tick.")
+    ap.add_argument("--ent-anneal", dest="ent_anneal", type=int, default=2000,
+                    help="generations over which --ent reaches --ent-final")
     ap.add_argument("--ent", type=float, default=0.003,
                     help="0.01 kept entropy at 2.31 of a max 3.22 after 4.7M steps - the "
                          "policy never committed to a line. Surf needs sustained precise "
@@ -114,6 +124,9 @@ def main():
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--minibatch", type=int, default=4096)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--frameskip", type=int, default=2,
+                    help="the actors' decision rate, only used to turn a finishing "
+                         "episode's step count into seconds")
     ap.add_argument("--max-lag", dest="max_lag", type=int, default=12,
                     help="drop batches produced by a policy this many generations "
                          "behind. With sync on, one consumed batch unblocks every "
@@ -122,9 +135,15 @@ def main():
                          "anything. 0 disables the check.")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--kl-ref", dest="kl_ref", type=float, default=0.03,
-                    help="penalty on moving away from the cloned policy; 0 disables")
+                    help="penalty on moving away from the anchor policy; 0 disables")
+    # The anchor used to be the behaviour clone, and stayed the behaviour clone
+    # long after the policy had overtaken it - by 3600 generations it was pulling
+    # a policy that finishes 82% of its runs back towards one cloned from a
+    # single human run that spends 253 ticks outside the deviation limit the
+    # reward enforces. Anchoring to the best known policy instead is what this
+    # term is actually for: not "stay like the clone" but "do not collapse".
     ap.add_argument("--ref-ckpt", dest="ref_ckpt",
-                    default=os.path.join(os.path.dirname(__file__), "..", "data", "ckpt_bc.npz"))
+                    default=os.path.join(os.path.dirname(__file__), "..", "data", "ckpt_anchor.npz"))
     ap.add_argument("--keep", action="store_true", help="keep consumed batch files")
     ap.add_argument("--timeout", type=float, default=600.0, help="seconds to wait for a batch")
     args = ap.parse_args()
@@ -161,6 +180,18 @@ def main():
                 print("obs %d, actions %d. Migrate the checkpoint or start fresh."
                       % (OBS_DIM, N_ACTIONS))
                 return 1
+        for i, p in enumerate(value.params()):
+            key = "v%d" % i
+            if key not in z.files:
+                print("checkpoint %s is missing %s: it has %d value tensors, this "
+                      "build needs %d. The critic was written incompletely."
+                      % (args.ckpt, key, sum(k[0] == 'v' for k in z.files),
+                         len(value.params())))
+                return 1
+            if z[key].shape != p.shape:
+                print("checkpoint %s: value tensor %d is %s, expected %s"
+                      % (args.ckpt, i, z[key].shape, p.shape))
+                return 1
         for i, p in enumerate(policy.params()):
             p[...] = z["p%d" % i]
         for i, p in enumerate(value.params()):
@@ -172,6 +203,8 @@ def main():
             value.ret_count = float(z["ret_count"])
         print("resumed from %s at generation %d" % (args.ckpt, gen))
 
+    ent_gen0 = gen
+
     ref_policy = None
     if args.kl_ref > 0.0 and os.path.exists(args.ref_ckpt):
         z = np.load(args.ref_ckpt)
@@ -182,12 +215,38 @@ def main():
     elif args.kl_ref > 0.0:
         print("no anchor at %s - running unanchored" % args.ref_ckpt)
 
+    HEADER = ("gen,batch,episodes,steps,mean_return,mean_progress,best_progress,"
+              "fell,finished,timeout,stuck,entropy,kl,clipfrac,val_loss,kl_ref,wall,"
+              "runs_from_start,finished_from_start,best_full_run_s,median_full_run_s")
+
     os.makedirs(os.path.dirname(os.path.abspath(args.log)), exist_ok=True)
     new_log = not os.path.exists(args.log)
+
+    # An existing log written by an older build has fewer columns. Appending
+    # wider rows to it produces a file whose header no longer describes its
+    # contents - every reader here looks columns up BY NAME, so the new ones
+    # would silently read as the wrong thing or vanish. Pad the old rows instead,
+    # leaving the new fields empty, which is what they are: not recorded.
+    if not new_log:
+        try:
+            with open(args.log, encoding="utf-8-sig") as fh:
+                lines = fh.read().splitlines()
+            if lines and lines[0] != HEADER:
+                want = HEADER.count(",") + 1
+                have = lines[0].count(",") + 1
+                if have < want:
+                    pad = "," * (want - have)
+                    fixed = [HEADER] + [l + pad for l in lines[1:] if l.strip()]
+                    with open(args.log, "w", encoding="utf-8", newline="\n") as fh:
+                        fh.write("\n".join(fixed) + "\n")
+                    print("train log: added %d column(s), padded %d existing rows"
+                          % (want - have, len(fixed) - 1))
+        except OSError as e:
+            print("could not check the train log header (%s)" % e)
+
     logf = open(args.log, "a")
     if new_log:
-        print("gen,batch,episodes,steps,mean_return,mean_progress,best_progress,"
-              "fell,finished,timeout,stuck,entropy,kl,clipfrac,val_loss,kl_ref,wall", file=logf)
+        print(HEADER, file=logf)
         logf.flush()
 
     # publish generation 1 so the actor starts from a real policy rather than its
@@ -231,6 +290,21 @@ def main():
 
         info = read_done(donep)
 
+        # Produced against a different centerline than the learner is using.
+        batch_track = float(info.get("track_length", 0.0) or 0.0)
+        if batch_track > 0.0 and abs(batch_track - track.length) > 1.0:
+            print("skip %s: built against a track of %.1f units, this learner has "
+                  "%.1f - regenerate the track or restart the actors so they agree"
+                  % (stem, batch_track, track.length))
+            processed.add(batch_key)
+            if not args.keep:
+                for pth in (binp, donep):
+                    try:
+                        os.remove(pth)
+                    except OSError:
+                        pass
+            continue
+
         # Too far behind the current policy to be worth an update.
         batch_gen = int(info.get("gen", gen))
         if args.max_lag > 0 and gen - batch_gen > args.max_lag:
@@ -244,11 +318,30 @@ def main():
                         pass
             continue
 
+        # Linear anneal from --ent to --ent-final, measured from the generation
+        # this learner started at, so a restart does not begin the schedule again.
+        ent_now = args.ent
+        if args.ent_final is not None and args.ent_anneal > 0:
+            frac = min(max(gen - ent_gen0, 0) / float(args.ent_anneal), 1.0)
+            ent_now = args.ent + (args.ent_final - args.ent) * frac
+
         t0 = time.time()
 
         obs_l, act_l, olp_l, adv_l, ret_l = [], [], [], [], []
         counts = {"fell": 0, "finished": 0, "timeout": 0, "stuck": 0}
         progs = []
+
+        # Episodes that began at the start of the map and reached the end. This
+        # is the only honest measure of whether the bot can run the map, and
+        # neither existing column can express it: `finished` counts
+        # checkpoint-spawned episodes with ten seconds of track left, and
+        # `best_progress` pins at 1.0 the moment anything finishes and never
+        # moves again. Reading it off the batch files on disk instead was no
+        # good either - the learner deletes them as it consumes them, so two
+        # readings ten minutes apart sampled 40 episodes and 84, and disagreed
+        # by a factor of three. Counted here, where every episode is seen once.
+        run0 = fin0 = 0
+        fin0_steps = []
 
         for ep in eps:
             if ep.n == 0:
@@ -273,6 +366,12 @@ def main():
             olp_l.append(ep.steps[:, 7])
             adv_l.append(adv)
             ret_l.append(ret)
+            if ep.start_state == 0:
+                run0 += 1
+                if ep.outcome == EP_FINISHED:
+                    fin0 += 1
+                    fin0_steps.append(ep.n)
+
             start_s = float(state_s[ep.start_state]) if ep.start_state < len(state_s) else 0.0
             gained = max(float(ep.best_s) - start_s, 0.0)
             progs.append(gained / track.length if track.length else 0.0)
@@ -291,7 +390,7 @@ def main():
 
         stats = ppo_update(policy, value, pol_opt, val_opt, obs, act, olp, adv, ret,
                            epochs=args.epochs, minibatch=args.minibatch,
-                           clip=args.clip, ent_coef=args.ent, rng=rng,
+                           clip=args.clip, ent_coef=ent_now, rng=rng,
                            ref_policy=ref_policy, kl_ref_coef=args.kl_ref)
 
         gen += 1
@@ -302,25 +401,58 @@ def main():
         best_prog = float(np.max(progs)) if progs else 0.0
         wall = time.time() - t_start
 
+        # Best AND median. The entropy anneal deliberately shrinks the tail of the
+        # action distribution, so "fastest run seen" is exactly the statistic it
+        # makes look worse while the policy gets better: the 39.178 s record at
+        # gen 6217 was a lucky sample, not a capability - with a deterministic
+        # policy the same opening repeats tick for tick, and its time was 39.52.
+        # Judged on the best alone, sharpening the policy reads as a regression.
+        best_full = (min(fin0_steps) * args.frameskip / 66.67) if fin0_steps else 0.0
+        med_full = (float(np.median(fin0_steps)) * args.frameskip / 66.67) if fin0_steps else 0.0
+
         print("gen %-4d %s | eps %3d steps %6d | ret %7.2f | gain %5.2f%% (best %5.2f%%) | "
-              "fell %3d fin %2d to %2d stuck %3d | H %.3f kl %+.4f clip %.3f vl %.3f | %.1fs upd %.2fs"
+              "fell %3d fin %2d to %2d stuck %3d | H %.3f kl %+.4f clip %.3f vl %.3f | full %d/%d %.2fs | H* %.4f | %.1fs upd %.2fs"
               % (gen, stem, len(eps), obs.shape[0], mean_ret, mean_prog * 100, best_prog * 100,
                  counts["fell"], counts["finished"], counts["timeout"], counts["stuck"],
                  stats["entropy"], stats["kl"], stats["clipfrac"], stats["val_loss"],
-                 wall, time.time() - t0))
+                 fin0, run0, med_full, ent_now, wall, time.time() - t0))
 
-        print("%d,%s,%d,%d,%.4f,%.5f,%.5f,%d,%d,%d,%d,%.4f,%.5f,%.4f,%.4f,%.5f,%.1f"
+        print("%d,%s,%d,%d,%.4f,%.5f,%.5f,%d,%d,%d,%d,%.4f,%.5f,%.4f,%.4f,%.5f,%.1f,%d,%d,%.3f,%.3f"
               % (gen, stem, len(eps), obs.shape[0], mean_ret, mean_prog, best_prog,
                  counts["fell"], counts["finished"], counts["timeout"], counts["stuck"],
                  stats["entropy"], stats["kl"], stats["clipfrac"], stats["val_loss"],
-                 stats["kl_ref"], wall),
+                 stats["kl_ref"], wall, run0, fin0, best_full, med_full),
               file=logf)
         logf.flush()
 
-        np.savez(args.ckpt, gen=gen,
+        # Written to a temporary file and moved into place, not written over the
+        # live one. This is the only record of the run - thousands of generations
+        # - and the daemon force-kills this process on every power change and
+        # every restart. A kill landing inside np.savez leaves a truncated .npz
+        # and the whole run is gone, with the previous good copy already
+        # overwritten. The window is small; the cost of losing that bet is the
+        # entire night.
+        tmp = args.ckpt + ".tmp"
+        np.savez(tmp, gen=gen,
                  ret_mean=value.ret_mean, ret_var=value.ret_var, ret_count=value.ret_count,
                  **{"p%d" % i: p for i, p in enumerate(policy.params())},
                  **{"v%d" % i: p for i, p in enumerate(value.params())})
+        if not tmp.endswith(".npz"):
+            tmp += ".npz"          # numpy appends the extension when it is absent
+        try:
+            if os.path.exists(args.ckpt):
+                shutil.copyfile(args.ckpt, args.ckpt + ".prev")
+        except OSError:
+            pass
+        for attempt in range(20):
+            try:
+                os.replace(tmp, args.ckpt)
+                break
+            except PermissionError:
+                # Windows: something else has the file open for a moment.
+                time.sleep(0.1)
+        else:
+            print("could not move the checkpoint into place - it is still at %s" % tmp)
 
         processed.add(batch_key)
         consumed += 1

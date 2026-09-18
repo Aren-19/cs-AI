@@ -34,6 +34,7 @@ int  g_iTrainBatches   = 0;        // batches remaining; <0 = unlimited
 int  g_iActorId        = 0;
 
 float g_fEvalSavedMix  = 0.0;
+int  g_iEvalSavedBatch = 64;   // restored after an eval, which borrows it
 int  g_iTrainDone      = 0;
 bool g_bTrainQuitAfter = false;
 float g_fTrainStart    = 0.0;   // start of the current batch
@@ -47,6 +48,12 @@ stock void Train_WeightsPath(char[] buf, int maxlen)
 
 stock void Train_WriteDoneMarker()
 {
+	if (g_bBatchBroken)
+	{
+		PrintToServer("[CsAI] batch %d has no output file - not announcing it", g_iBatchIndex);
+		g_bBatchBroken = false;
+		return;
+	}
 	char path[PLATFORM_MAX_PATH];
 	BuildPath(Path_SM, path, sizeof(path), "data/csai/out/a%d_batch_%04d.done", g_iActorId, g_iBatchIndex);
 
@@ -55,6 +62,12 @@ stock void Train_WriteDoneMarker()
 		return;
 
 	// A tiny summary so the learner can log progress without parsing the binary.
+	// The learner rebuilds every observation from its own copy of the track. If
+	// the two ever differ - a regenerated centerline, a half-restarted actor -
+	// the importance ratios are computed against a distribution nothing sampled
+	// and training quietly degrades with no error anywhere. So the batch states
+	// what it was produced against and the learner refuses to mix them.
+	f.WriteLine("track_length %.1f", g_fTrackLength);
 	f.WriteLine("episodes %d", g_iBatchEpisodes);
 	f.WriteLine("gen %d", g_iPolicyGen);
 	f.WriteLine("mean_return %.4f", (g_iBatchEpisodes > 0) ? (g_fStatReturnSum / float(g_iBatchEpisodes)) : 0.0);
@@ -92,6 +105,11 @@ stock void Train_Begin(int batches, bool sync, bool quitAfter)
 	if (g_iStateCount == 0)
 	{
 		PrintToServer("[CsAI] train: no start states loaded for this map");
+		// Quit rather than sit idle: an armed headless run that returns here
+		// never exits, so the Python side waits out its whole timeout and
+		// reports a timeout instead of the actual reason.
+		if (g_bQuitAfter)
+			ServerCommand("quit");
 		return;
 	}
 	// Prefer a policy the learner has already produced; random init is only the
@@ -108,6 +126,8 @@ stock void Train_Begin(int batches, bool sync, bool quitAfter)
 
 	g_iTrainBatches   = batches;
 	g_bTrainSync      = sync;
+	g_bEval           = false;   // never begin training in evaluation mode
+	g_iEvalLeft       = 0;
 	g_bTrainQuitAfter = quitAfter;
 	g_iTrainDone      = 0;
 	g_bTrainWaiting   = false;
@@ -128,6 +148,13 @@ stock void Train_Begin(int batches, bool sync, bool quitAfter)
 
 stock void Train_Stop()
 {
+	// Cleared here too. It used to be reset only at the natural end of an eval,
+	// so stopping one part-way (or changing map during one) left g_bEval set -
+	// and the next csai_train routed its first finished episode into
+	// Eval_EpisodeDone, printed "eval complete", and stopped. A training run
+	// that silently did one episode.
+	g_bEval = false;
+	g_iEvalLeft = 0;
 	g_bTraining = false;
 	delete g_hBatchFile;
 
@@ -256,7 +283,16 @@ stock void Eval_Begin(int runs)
 
 	char wpath[PLATFORM_MAX_PATH];
 	Train_WeightsPath(wpath, sizeof(wpath));
-	Pol_Load(wpath);
+	if (!Pol_Load(wpath) && !g_bPolicyLoaded)
+	{
+		// With no weights every logit is zero, argmax picks action 0 forever, and
+		// the run still reports a perfectly plausible "0/N finished, best 3.2%"
+		// for a policy that does not exist.
+		PrintToServer("[CsAI] eval: no usable weights at %s - refusing to run", wpath);
+		if (g_bQuitAfter)
+			ServerCommand("quit");
+		return;
+	}
 
 	g_bEval        = true;
 	g_bTraining    = true;      // reuse the episode machinery
@@ -276,6 +312,7 @@ stock void Eval_Begin(int runs)
 	g_iEvalSavedStates = g_iTrainStates;
 	g_iTrainStates = 1;         // always state 0
 	g_fEvalSavedMix = g_fStateMix;
+	g_iEvalSavedBatch = g_iBatchTarget;
 	g_fStateMix = 0.0;          // never start an eval run mid-map
 	g_iBatchTarget = runs + 1;  // never roll a batch mid-eval
 
@@ -321,8 +358,10 @@ stock void Eval_EpisodeDone()
 	if (g_iEvalLeft <= 0)
 	{
 		if (g_iEvalFinish > 0)
-			PrintToServer("[CsAI] eval complete: %d/%d finished, best %.1f%% of track, best time %.2fs (human 39.10s)",
-			              g_iEvalFinish, g_iEvalDone, g_fEvalBestFrac * 100.0, g_fEvalBestTime);
+			// g_fRefTime, not a literal: this said "human 39.10s" on every map,
+			// and surf_demise's own reference is 39.045.
+			PrintToServer("[CsAI] eval complete: %d/%d finished, best %.1f%% of track, best time %.2fs (human %.2fs)",
+			              g_iEvalFinish, g_iEvalDone, g_fEvalBestFrac * 100.0, g_fEvalBestTime, g_fRefTime);
 		else
 			PrintToServer("[CsAI] eval complete: 0/%d finished, best %.1f%% of track",
 			              g_iEvalDone, g_fEvalBestFrac * 100.0);
@@ -330,6 +369,7 @@ stock void Eval_EpisodeDone()
 		g_bTraining = false;
 		g_iTrainStates = g_iEvalSavedStates;
 		g_fStateMix = g_fEvalSavedMix;
+		g_iBatchTarget = g_iEvalSavedBatch;
 		delete g_hBatchFile;
 		if (g_bTrainQuitAfter)
 			ServerCommand("quit");

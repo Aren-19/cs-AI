@@ -20,9 +20,32 @@ import numpy as np
 
 from rollout import Track, OBS_DIM, LOOKAHEAD, PROBE_DIM, WISH_DIM
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
 DUMP = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\out\obsdump.txt")
-TRACK = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\surf_demise_track.txt")
+DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
+
+
+def _map_name():
+    """Which map to verify. Was hardcoded, so checking parity on a new map meant
+    editing this file - and parity is the one guard against the learner silently
+    training on observations the actor never produced."""
+    for i, a in enumerate(sys.argv):
+        if a == "--map" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    try:
+        with open(os.path.join(os.path.dirname(HERE), "data", "map.txt"),
+                  encoding="utf-8-sig") as fh:
+            n = fh.read().strip()
+            if n:
+                return n
+    except OSError:
+        pass
+    return "surf_demise"
+
+
+MAP = _map_name()
+TRACK = os.path.join(DATA, "%s_track.txt" % MAP)
 
 
 def main():

@@ -128,6 +128,8 @@ stock void Pol_RandomInit()
  * Flat and dumb on purpose - SourcePawn has no JSON, and this is read once per
  * batch, never in the hot path.
  */
+static float s_fLoadBuf[POL_TOTAL];   // parsed here, committed only if complete
+
 stock bool Pol_Load(const char[] path)
 {
 	if (!FileExists(path))
@@ -170,20 +172,43 @@ stock bool Pol_Load(const char[] path)
 			continue;
 		}
 
-		float v = StringToFloat(line);
-		int i = n;
-		if (i < POL_W1_N)                                     { g_fW1[i] = v; }
-		else if ((i -= POL_W1_N) < POL_H1)                    { g_fB1[i] = v; }
-		else if ((i -= POL_H1) < POL_W2_N)                    { g_fW2[i] = v; }
-		else if ((i -= POL_W2_N) < POL_H2)                    { g_fB2[i] = v; }
-		else if ((i -= POL_H2) < POL_W3_N)                    { g_fW3[i] = v; }
-		else if ((i -= POL_W3_N) < POL_ACTIONS)               { g_fB3[i] = v; }
+		if (n < POL_TOTAL)
+			s_fLoadBuf[n] = StringToFloat(line);
 		n++;
 	}
 	delete f;
 
 	if (!ok)
 		return false;
+	if (n != POL_TOTAL)
+	{
+		PrintToServer("[CsAI] weights: got %d floats, need %d - ignoring this read", n, POL_TOTAL);
+		return false;
+	}
+
+	// Committed only now, from the scratch buffer.
+	//
+	// This used to write straight into the live arrays as it parsed and return
+	// false afterwards on a short or mismatched file - leaving the bot running a
+	// half-old, half-new policy while still reporting the OLD generation, so the
+	// learner computed importance ratios against a distribution nothing sampled.
+	// The learner rewrites this file every generation and the plugin polls it
+	// four times a second, so catching it mid-write is a matter of timing.
+	for (int i = 0; i < POL_TOTAL; i++)
+	{
+		int k = i;
+		if (k < POL_W1_N)                          { g_fW1[k] = s_fLoadBuf[i]; continue; }
+		k -= POL_W1_N;
+		if (k < POL_H1)                            { g_fB1[k] = s_fLoadBuf[i]; continue; }
+		k -= POL_H1;
+		if (k < POL_W2_N)                          { g_fW2[k] = s_fLoadBuf[i]; continue; }
+		k -= POL_W2_N;
+		if (k < POL_H2)                            { g_fB2[k] = s_fLoadBuf[i]; continue; }
+		k -= POL_H2;
+		if (k < POL_W3_N)                          { g_fW3[k] = s_fLoadBuf[i]; continue; }
+		k -= POL_W3_N;
+		if (k < POL_ACTIONS)                       { g_fB3[k] = s_fLoadBuf[i]; }
+	}
 
 	if (n != POL_TOTAL)
 	{

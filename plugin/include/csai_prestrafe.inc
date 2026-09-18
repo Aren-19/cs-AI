@@ -46,13 +46,29 @@ float g_fPreStartSet[PRE_MAX_SETS][3];
 float g_fPreStartAngSet[PRE_MAX_SETS][3];
 int   g_iPreCountSet[PRE_MAX_SETS];
 int   g_iPreSets = 0;
-int   g_iPreLongest = 0;   // the fullest wind-up, used for evaluation replays
+int   g_iPreLongest = 0;   // the fullest wind-up; the default until a run picks one
 
 float g_fPreAng[PRE_MAX_TICKS][2];
 int   g_iPreButtons[PRE_MAX_TICKS];
 float g_fPreStart[3];
 float g_fPreStartAng[3];
 int   g_iPreCount   = 0;
+
+/**
+ * How many ticks at the END of the wind-up the policy drives itself.
+ *
+ * 0 replays the whole recording, which is what every run up to gen 8800 did.
+ * Measured at that point: with a deterministic policy the map is run identically
+ * every time - five runs of one opening agreed tick for tick - and the entire
+ * spread in finish time came from WHICH recorded opening was drawn, 39.52 s for
+ * the best against 40.20 s for the worst, with one that failed outright. The
+ * opening was the only part of the run nothing was optimising.
+ *
+ * Grown a few ticks at a time. The states near the handover are ones the policy
+ * already knows; the states at the very start of a wind-up, stationary on the
+ * ground, are ones it has never seen in 8800 generations.
+ */
+int   g_iPreLearned = 0;
 
 bool  g_bPrestrafeEnabled = true;
 bool  g_bPreActive  = false;     // currently replaying
@@ -84,7 +100,19 @@ stock void Pre_Load()
 	while (!f.EndOfFile() && f.ReadLine(line, sizeof(line)))
 	{
 		TrimString(line);
-		if (line[0] == '\0' || line[0] == '#')
+		if (line[0] == '#')
+		{
+			if (!Demo_TickrateOk(line))
+			{
+				PrintToServer("[CsAI] prestrafe: recorded at a different tickrate");
+				PrintToServer("[CsAI]   than this server - refusing it. Re-time: setup_map.py");
+				delete f;
+				g_iPreCount = 0;
+				return;
+			}
+			continue;
+		}
+		if (line[0] == '\0')
 			continue;
 		if (g_iPreCount >= PRE_MAX_TICKS)
 			break;
@@ -144,7 +172,17 @@ stock bool Pre_Begin(int client)
 	// the bot appearing at the line already moving. Training samples all of them
 	// so the policy sees a spread of opening states.
 	if (g_iPreSets > 0)
-		Pre_Select(g_bEval ? g_iPreLongest : RoundToFloor(Pol_Rand() * float(g_iPreSets)));
+		// Evaluation CYCLES the recorded prestrafes; training samples them.
+		//
+		// It used to always take the longest, which is one of eight the policy
+		// trains against - so the reported number described a single opening
+		// state rather than the distribution it actually faces. That is not a
+		// small effect: changing only which prestrafe an eval used once took the
+		// same policy from 72.4% to 11.3%. Cycling by run index keeps the runs
+		// deterministic and reproducible while covering the same spread training
+		// sees.
+		Pre_Select(g_bEval ? (g_iEvalDone % g_iPreSets)
+		                   : RoundToFloor(Pol_Rand() * float(g_iPreSets)));
 
 	if (!g_bPrestrafeEnabled || g_iPreCount == 0 || client == -1 || !IsClientInGame(client))
 		return false;

@@ -36,7 +36,12 @@ sys.path.insert(0, HERE)
 from ppo import Policy, Value, Adam, log_softmax, write_weights, POL_TOTAL
 from rollout import OBS_DIM, N_ACTIONS
 
-N_TRIMS = N_ACTIONS // 2      # actions 0..N_TRIMS-1 are side +1, the rest side -1
+# (N_ACTIONS - 1) // 2, not N_ACTIONS // 2: the last action is coast, which
+# presses nothing. With the naive halving a predicted coast (16) fell into the
+# "side -1" bucket and quietly corrupted both the side accuracy and the
+# switch-rate figure the whole cloning effort is judged on.
+N_TRIMS = (N_ACTIONS - 1) // 2   # 0..N_TRIMS-1 = side +1, then side -1, then coast
+COAST = N_ACTIONS - 1
 
 CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
