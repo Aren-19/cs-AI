@@ -2,9 +2,12 @@
 
 A bot that teaches itself to surf in Counter-Strike: Source.
 
-It watches one of your recorded runs to learn the basic technique, then practises
-the map over and over on its own, trying to get further and faster each time. The
+It watches your recorded runs to learn the basic technique, then practises the
+map over and over on its own, trying to get further and faster each time. The
 idea is the same as the Trackmania bots that learn a track by repetition.
+
+On surf_demise it now gets to the end, in about 39.6 seconds against a hand-made
+39.04.
 
 ## Read this first
 
@@ -14,17 +17,27 @@ your account banned. Nothing here should ever be pointed at a public server.
 
 ## Where it is right now
 
-Map: surf_demise. Human time to beat: 39.10 seconds.
+Map: surf_demise. The run to beat is 39.04 seconds, set by hand.
 
-| | best run | human |
+It finishes the map. Out of eight runs from the start, seven get to the end, and
+the times sit in a tight band:
+
+| | bot | the human run |
 |---|---|---|
-| how far it gets | about 60% of the map | finishes |
-| top speed it holds | 3298 units/s | 3614 units/s |
-| strafe key changes | 8.35 per second | 0.95 per second |
+| finishes the map | 7 runs out of 8 | yes |
+| best time | 39.59 s | 39.04 s |
+| typical time | 39.67 s | - |
+| strafe key changes | 0.81 per second | 1.05 per second |
+| time spent at a useful angle | 98.2% | 97.8% |
+| speed it holds | 3610 units/s | 3589 units/s |
 
-So it surfs, it is nearly as fast as a person, and it gets most of the way
-through. It does not finish yet, and it still swaps between the A and D keys far
-more often than a person would. Both are being worked on.
+So it surfs about as well as a person does, and it is roughly half a second off
+the pace. The key-swapping problem it used to have is gone: it used to change
+keys eight times a second, which scored well and looked nothing like surfing.
+
+What is left is the last half second, and that is harder than everything before
+it. Watching the runs, the bot is not losing time in any one place - it is a
+fraction slower everywhere.
 
 ## Running it
 
@@ -50,26 +63,39 @@ There is more detail in [HOWTO.md](HOWTO.md).
 You can change this at any time, even while it is running, and nothing already
 learned is lost.
 
-| setting | when to use it |
-|---|---|
-| idle | you are gaming or watching something |
-| low | you are working on the PC |
-| medium | background |
-| high | default |
-| max | you are away from the PC |
+| setting | game servers | when to use it |
+|---|---|---|
+| idle | 1 | you are gaming or watching something |
+| low | 2 | you are working on the PC |
+| medium | 4 | background |
+| high | 6 | leave it here |
+| max | 11 | see below |
 
-Training runs several copies of the server side by side to go faster. On a 12
-core machine that is about five times quicker than running one.
+**Max is not the fastest setting.** It was, on paper, and that turned out to be
+wrong when it was finally measured. The game servers were never the slow part.
+They were already producing more than twice the practice runs the learner could
+read, so most of it was thrown away unread, and the extra servers took the
+processor time the learner needed to read the rest. On a 12 core machine:
+
+| | practice read per hour | thrown away |
+|---|---|---|
+| 11 servers | 19.8 million steps | 55% |
+| 6 servers | 44.3 million steps | none |
+
+Twice the learning on half the machine. High is the default and there is no
+reason to move off it.
 
 ## How it works
 
 Every attempt is one run of the whole map, start to finish.
 
 1. Your recorded start is replayed first. Building up speed before the timer
-   starts is a trick the bot cannot do on its own, so it just copies yours.
+   starts is a different skill to surfing, and letting the bot learn that part
+   too was tried and made it slower, so it copies yours.
 2. The bot takes over and surfs the rest.
-3. It gets a score for how far along the map it travelled, and a little of that
-   score feeds back into how it steers next time.
+3. It gets a score for how far along the map it travelled, and for how long it
+   took if it got to the end. A little of that score feeds back into how it
+   steers next time.
 
 When you surf, the only thing that really matters is the angle between the way
 you are holding your keys and the way you are already moving. So that angle is
@@ -98,13 +124,16 @@ first one.
 
 This is the most useful thing you can do for it.
 
-The bot currently has one run of yours to learn from. It has never seen what
-happens when you are slightly off your usual line, which is why it can surf a
-ramp nicely and then have no idea how to save itself.
+It has eight runs of yours on surf_demise now, and that made a real difference.
+More still help, and they do not need to be fast or clean. A messy run where you
+wobble and recover is worth more than another perfect one, because recovering is
+the part it sees least of.
 
-More recordings fix that. They do not need to be fast or clean. A messy run where
-you wobble and recover is worth more than another perfect one, because recovering
-is the part it is missing.
+One thing worth knowing: a run is only useful if it stays near the route the bot
+is scored against. Four of the eight stray far enough off it that the bot would
+be counted as having fallen. They are fine to keep, but they are not good ones to
+copy technique from. `python tools/setup_map.py surf_demise --check` says which
+is which.
 
 See [HOWTO.md](HOWTO.md) for how to add them.
 
@@ -117,8 +146,17 @@ See [HOWTO.md](HOWTO.md) for how to add them.
 | `web/` | the local replay viewer |
 | `docs/` | notes on what was tried and what worked |
 
+A few things in `tools/` you might run by hand:
+
+| | |
+|---|---|
+| `setup_map.py <map>` | get a map ready from your replays, or `--check` what is wrong |
+| `finishes.py` | how often it gets to the end, and where the rest stop |
+| `compare.sh <gen>` | how the run since a change compares to before it |
+| `report.py` | writes `reports/latest.md` |
+
 `docs/experiments.md` is a running log of every change and whether it helped,
-including the ones that did not.
+including the ones that did not, which is most of them.
 
 ## Credit for the viewer
 

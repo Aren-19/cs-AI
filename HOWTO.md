@@ -27,7 +27,7 @@ to read it, and again to put it away.
 The bottom half tails the logs. The drop-down picks which one.
 
 **Closing the panel does not stop training.** It runs in the background until you
-choose [2], so you can start it and walk away for hours.
+press stop training, so you can start it and walk away for hours.
 
 ## Power levels
 
@@ -69,15 +69,13 @@ that runs on a GPU. Spare VRAM cannot help.
 
 ## Watching replays
 
-[4] opens the local replay viewer at `http://127.0.0.1:3000` — or double-click
+**replay viewer** opens it at `http://127.0.0.1:3000` — or double-click
 **`Viewer.bat`**. The newest bot run is at the top of Recent Times; click it, then
 **View Replay**. First load of a map takes a few seconds while its geometry is
 cached, then it's instant.
 
-The daemon evaluates the policy every 40 generations, so there is always a recent
-replay to watch without doing anything.
-
-[6] makes one on demand from the current policy.
+Training scores itself every few minutes and saves the best of those runs, so
+there is always a recent replay to watch without doing anything.
 
 ## How a run is put together
 
@@ -162,8 +160,8 @@ away. Slower runs are exactly the ones worth keeping here.
 
 ### Before you play
 
-Stop training first, or set the power to idle. Six copies of the server are using
-your CPU and the game will feel awful otherwise. Use [2] or [3] in `CsAI.bat`.
+Stop training first, or set the power to idle, both from the panel. Six copies of
+the server are using your CPU and the game will feel awful otherwise.
 
 ### What kind of runs help
 
@@ -214,7 +212,7 @@ Written automatically to `reports/`:
 - `report_YYYYMMDD_HHMM.md` — a snapshot every 5 minutes, so you can see how
   things moved while you were away
 
-[5] shows the latest in the window. [7] opens the folder.
+**report** writes the latest one and opens it. **open folder** gets you the rest.
 
 Each report carries progress sparklines, the last 12 generations, and a **control
 quality** table — `phi in window` is the share of frames where the bot's aim is in
@@ -224,7 +222,7 @@ finish time alone does not.
 
 ## Logs
 
-- `logs/daemon.log` — starts, stops, power changes, crashes and restarts. [8]
+- `logs/daemon.log` — starts, stops, power changes, crashes and restarts. The panel
   tails it live.
 - `data/train_log.csv` — one row per generation, the raw record.
 - `docs/experiments.md` — what each configuration change was and whether it worked.
@@ -232,6 +230,6 @@ finish time alone does not.
 ## If something looks wrong
 
 The daemon restarts the learner or the actor automatically if either dies, and
-logs it. If training seems stuck, check [8] for a restart loop.
+logs it. If training seems stuck, read `daemon.log` in the panel for a restart loop.
 
 Training and the viewer are independent — stopping one doesn't affect the other.
