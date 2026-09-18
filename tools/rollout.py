@@ -1,26 +1,7 @@
-"""
-Read trajectory batches written by the plugin, and rebuild the observations the
-policy actually saw.
+"""Read trajectory batches and rebuild the observations the policy saw.
 
-The plugin logs only (pos, vel, action, logp, reward) - 9 floats per step. The
-observation is recomputed here. That keeps records small and lets the observation
-definition change without re-collecting data, but it carries one hard
-requirement: **this must reproduce csai_track.inc exactly**. If the observations
-diverge, PPO computes its ratio against a distribution the actor never used, and
-the gradient is wrong in a way nothing will report.
-
-So the nearest-point search here is the plugin's *windowed* search, hint and all -
-not a full argmin. On a track that never approaches itself they agree, but
-mirroring it removes the question. tools/check_obs.py verifies the two against
-each other numerically.
-
-Batch file format (little-endian):
-    per episode:
-        int32   n_steps
-        int32   outcome        (1 fell, 2 finished, 3 timeout, 4 stuck)
-        int32   start_state
-        float32 best_s
-        n_steps * 9 * float32  px py pz vx vy vz action logp reward
+Must reproduce csai_track.inc exactly, including its windowed nearest-point
+search. tools/check_obs.py verifies the two numerically.
 """
 
 import math
@@ -46,7 +27,6 @@ OUTCOME_NAMES = {1: "fell", 2: "finished", 3: "timeout", 4: "stuck"}
 # 9 core fields + the probe, which needs engine collision and so is logged
 # rather than recomputed here.
 REC_FLOATS = 9 + PROBE_DIM + 1   # +1: held wish angle
-
 
 class Track(object):
     """Centerline, mirroring csai_track.inc."""
@@ -158,7 +138,6 @@ class Track(object):
             obs[o + 2] = rz / scale
         return obs
 
-
 class Episode(object):
     __slots__ = ("outcome", "start_state", "best_s", "steps")
 
@@ -174,14 +153,8 @@ class Episode(object):
 
     @property
     def terminal(self):
-        """True when the episode ended in a real terminal state, not a cutoff.
-
-        Timeout and stuck are time limits, not terminals: bootstrapping through
-        them is correct, and treating them as absorbing would teach the agent
-        that running out of clock is as bad as falling.
-        """
+        """True when the episode ended in a real terminal state, not a cutoff."""
         return self.outcome in (EP_FELL, EP_FINISHED)
-
 
 def read_batch(path):
     with open(path, "rb") as fh:
@@ -207,7 +180,6 @@ def read_batch(path):
         raise ValueError("trailing %d bytes in %s" % (total - off, os.path.basename(path)))
     return episodes
 
-
 def episode_obs(track, ep):
     """Rebuild the observation sequence, reproducing the plugin's hint evolution."""
     n = ep.n
@@ -215,16 +187,13 @@ def episode_obs(track, ep):
     if n == 0:
         return obs
 
-    # Ep_Begin does a full scan; every tick after that is windowed. The plugin
-    # advances the hint every physics tick, we only see decision steps, so the
-    # window is widened by the frame-skip factor implicitly via hint drift.
     hint = -1
     for i in range(n):
         pos = ep.steps[i, 0:3]
         vel = ep.steps[i, 3:6]
         hint = track.nearest(pos, hint)
         obs[i] = track.build_obs(pos, vel, hint)
-        # splice in what the actor actually saw but we cannot recompute:
+        # splice in what the actor logged and this cannot recompute:
         # the collision probe, and the wish angle it was holding
         base = 7 + 3 * LOOKAHEAD
         obs[i, base:base + PROBE_DIM] = ep.steps[i, 9:9 + PROBE_DIM]
@@ -233,7 +202,6 @@ def episode_obs(track, ep):
             obs[i, base + PROBE_DIM + 0] = math.cos(wish)
             obs[i, base + PROBE_DIM + 1] = math.sin(wish)
     return obs
-
 
 def load_batch(track, path):
     """Returns (obs, actions, old_logp, rewards, dones, episode list)."""
@@ -258,7 +226,6 @@ def load_batch(track, path):
     return (np.concatenate(obs_l), np.concatenate(act_l), np.concatenate(logp_l),
             np.concatenate(rew_l), np.concatenate(done_l), eps)
 
-
 def batch_stats(eps):
     if not eps:
         return {}
@@ -275,16 +242,8 @@ def batch_stats(eps):
         "outcomes": outcomes,
     }
 
-
 def load_state_arclengths(track, states_path):
-    """
-    Arc length of each replay start state.
-
-    Needed because an episode's `best_s` is an ABSOLUTE position on the track. An
-    episode that starts at the 80% checkpoint and immediately falls still reports
-    best_s = 0.80, so reporting that as "progress" makes a policy that does
-    nothing look 80% successful. What matters is best_s minus the start.
-    """
+    """Arc length of each replay start state."""
     out = []
     with open(states_path) as fh:
         for line in fh:

@@ -1,11 +1,4 @@
-"""
-Summarise a training log: trend, rates, and a text sparkline.
-
-No matplotlib dependency - this is meant to be readable over a terminal while a
-run is in flight.
-
-    python tools/summary.py [--log data/train_log.csv] [--tail 40]
-"""
+"""One-line training summary."""
 
 import argparse
 import csv
@@ -13,7 +6,6 @@ import os
 import sys
 
 BLOCKS = " .:-=+*#%@"
-
 
 def spark(values, width=48):
     if not values:
@@ -36,7 +28,6 @@ def spark(values, width=48):
         t = (v - lo) / (hi - lo)
         out.append(BLOCKS[min(int(t * (len(BLOCKS) - 1)), len(BLOCKS) - 1)])
     return "".join(out)
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -118,7 +109,6 @@ def main():
     print()
     print("human reference: 39.10 s, 100% of track (surf_demise, 66 tick, no deaths)")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

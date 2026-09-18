@@ -1,10 +1,3 @@
-<#
-    CsAI control panel.
-
-    Launch it by double-clicking CsAI.bat in the project root. Everything you
-    need for an unattended run is here: start training at a chosen power level,
-    change that level while it runs, open the replay viewer, and read the report.
-#>
 $ErrorActionPreference = 'Continue'
 $Root = Split-Path -Parent $PSScriptRoot
 $PowerFile = Join-Path $Root 'data\power.txt'
@@ -33,9 +26,6 @@ function Test-Daemon {
     return [bool]$p
 }
 function Count-Actors {
-    # Training actors specifically. "any srcds is running" was satisfied by an
-    # eval instance, and by actors that were alive but wedged - the panel read
-    # RUNNING for 90 minutes while nothing trained.
     @(Get-CimInstance Win32_Process -Filter "Name='srcds_win64.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like '*csai_train_batches*' }).Count
 }
@@ -169,11 +159,6 @@ function Show-Report {
 
 function Make-Replay {
     Write-Host '  running the current policy (takes a minute)...' -ForegroundColor Cyan
-    # Must match what the daemon trains and evaluates with. Without -FrameSkip
-    # this drove a frameskip-2 policy at eval.ps1's default of 6 (73% vs 8.5%),
-    # and without -Greedy 0 it used argmax, which is a different controller
-    # entirely (6% vs 32-63%). Both produced a plausible bad replay that landed
-    # in the same viewer list as the good ones.
     $fs = 2
     $mapFile = Join-Path $Root 'data\map.txt'
     $map = if (Test-Path $mapFile) { (Get-Content $mapFile -Raw).Trim() } else { 'surf_demise' }

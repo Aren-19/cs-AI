@@ -1,18 +1,4 @@
-"""
-PPO in numpy.
-
-No torch: the policy is 2617 parameters, and hand-written backprop for a 3-layer
-MLP is a few dozen lines. Adding a multi-hundred-MB dependency to train a net
-this small would be the wrong trade, and numpy is already present.
-
-The policy's weight layout is dictated by csai_policy.inc, which indexes
-W1[j*OBS_DIM + i], W2[j*H1 + i], W3[j*H2 + i] - i.e. row-major (out, in). So C-order
-flattening of (H1, OBS), (H1,), (H2, H1), (H2,), (A, H2), (A,) is exactly the order
-the plugin reads. Do not reorder these without changing the plugin.
-
-The value function lives only here. The plugin never needs it, so keeping it as a
-separate network avoids coupling the shipped weights to the critic.
-"""
+"""Policy and value networks, PPO update, checkpoint and weight IO."""
 
 import numpy as np
 
@@ -23,15 +9,12 @@ H2 = 32
 
 POL_TOTAL = OBS_DIM * H1 + H1 + H1 * H2 + H2 + H2 * N_ACTIONS + N_ACTIONS
 
-
 def relu(x):
     return np.maximum(x, 0.0)
-
 
 def log_softmax(z):
     z = z - z.max(axis=-1, keepdims=True)
     return z - np.log(np.exp(z).sum(axis=-1, keepdims=True))
-
 
 class Adam(object):
     def __init__(self, shapes, lr=3e-4, b1=0.9, b2=0.999, eps=1e-8):
@@ -49,7 +32,6 @@ class Adam(object):
             vhat = self.v[i] / (1 - self.b2 ** self.t)
             p -= self.lr * mhat / (np.sqrt(vhat) + self.eps)
 
-
 class Policy(object):
     """obs -> logits. Mirrors csai_policy.inc (ReLU hidden, linear head)."""
 
@@ -60,10 +42,6 @@ class Policy(object):
         self.b1 = np.zeros(H1)
         self.W2 = rng.normal(0, np.sqrt(2.0 / H1), (H2, H1))
         self.b2 = np.zeros(H2)
-        # ...but a near-zero head, so the initial policy is close to uniform.
-        # With a normally-scaled head the logits are large enough that the random
-        # policy already commits to one action ~30% of the time, which throttles
-        # exploration from the very first batch.
         self.W3 = rng.normal(0, 0.01, (N_ACTIONS, H2))
         self.b3 = np.zeros(N_ACTIONS)
 
@@ -104,19 +82,8 @@ class Policy(object):
         """Flatten in the exact order csai_policy.inc reads."""
         return np.concatenate([p.ravel() for p in self.params()])
 
-
 class Value(object):
-    """
-    obs -> scalar. Python-only; tanh keeps it stable on wide-ranged inputs.
-
-    Predicts a NORMALISED return. Raw returns on this task reach ~90 (progress
-    reward accumulates over hundreds of steps), and a freshly initialised net with
-    a near-zero head needs a long time to reach that magnitude - meanwhile every
-    advantage is garbage, which showed up as a value loss stuck around 6.0 while
-    learning plateaued. Tracking a running mean/std of returns and predicting the
-    standardised target fixes the scale mismatch without touching the plugin or
-    invalidating existing checkpoints.
-    """
+    """obs -> scalar. Python-only; tanh keeps it stable on wide-ranged inputs."""
 
     def __init__(self, rng=None):
         rng = rng or np.random.default_rng(1)
@@ -195,16 +162,8 @@ class Value(object):
 
         return [gW1, gb1, gW2, gb2, gW3, gb3]
 
-
 def compute_gae(rewards, values, dones, last_value=0.0, gamma=0.99, lam=0.95):
-    """
-    Generalised advantage estimation over a concatenation of episodes.
-
-    `dones` marks *true* terminals only. Timeout and stuck are cutoffs, so the
-    value estimate is bootstrapped through them - treating a clock expiry as
-    absorbing would teach the agent that running out of time is as bad as falling
-    off the map.
-    """
+    """Generalised advantage estimation over a concatenation of episodes."""
     n = len(rewards)
     adv = np.zeros(n)
     last_gae = 0.0
@@ -219,19 +178,10 @@ def compute_gae(rewards, values, dones, last_value=0.0, gamma=0.99, lam=0.95):
         adv[t] = last_gae
     return adv, adv + values
 
-
 def ppo_update(policy, value, pol_opt, val_opt, obs, actions, old_logp, adv, returns,
                epochs=4, minibatch=4096, clip=0.2, ent_coef=0.01, vf_coef=0.5,
                max_grad_norm=1.0, rng=None, ref_policy=None, kl_ref_coef=0.0):
-    """PPO, optionally anchored to a frozen reference policy.
-
-    The anchor exists because progress reward on its own rediscovers jitter. The
-    cloned policy surfs at 973 u/s with 1.17 deg of steering noise; unconstrained
-    PPO is free to walk straight back to 19.79 side switches per second, because
-    that tracks the reference line more tightly. `kl_ref_coef` prices moving away
-    from the cloned behaviour, so RL buys speed with technique it already has
-    rather than trading the technique away.
-    """
+    """PPO, optionally anchored to a frozen reference policy."""
     rng = rng or np.random.default_rng(0)
     n = obs.shape[0]
 
@@ -305,7 +255,6 @@ def ppo_update(policy, value, pol_opt, val_opt, obs, actions, old_logp, adv, ret
         stats[key] /= k
     return stats
 
-
 def clip_grads(grads, max_norm):
     total = np.sqrt(sum(float((g * g).sum()) for g in grads))
     if total > max_norm and total > 0:
@@ -313,7 +262,6 @@ def clip_grads(grads, max_norm):
         for g in grads:
             g *= scale
     return total
-
 
 def write_weights(path, policy, gen):
     """Flat text, one float per line, in the plugin's expected order."""
@@ -324,9 +272,6 @@ def write_weights(path, policy, gen):
         print("# gen %d dim %d actions %d total %d" % (gen, OBS_DIM, N_ACTIONS, POL_TOTAL), file=fh)
         for v in flat:
             print("%.7g" % v, file=fh)
-    # The plugin polls this path, so it must never observe a partial file - hence
-    # write-then-replace. On Windows the replace fails with access-denied while
-    # the plugin has the file open for reading, so retry briefly.
     import os
     import time as _time
     for attempt in range(50):

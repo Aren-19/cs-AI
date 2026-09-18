@@ -1,19 +1,3 @@
-<#
-    Headless run / throughput benchmark.
-
-    Matches the project's 66-tick setup: no -tickrate parameter (engine default
-    66.7) and +servercfgfile server_66.cfg, exactly as start_66.bat does. The
-    reference replay was recorded at 66 tick, so training must match it or the
-    target time is meaningless.
-
-    Runs srcds with no client attached, drives the bot from a replay start state,
-    and reports ticks/second plus what the bot actually did.
-
-    Usage:
-        .\tools\bench.ps1
-        .\tools\bench.ps1 -Scales 1 -Ticks 2600 -State 0
-        .\tools\bench.ps1 -Scales 1,10,40,80 -Ticks 4000
-#>
 param(
     [double[]]$Scales = @(1),
     [int]$Ticks       = 2000,

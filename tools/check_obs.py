@@ -1,17 +1,4 @@
-"""
-Verify that tools/rollout.py reproduces csai_track.inc exactly.
-
-The plugin logs only (pos, vel) per step; the learner rebuilds the observation
-from that. If the two implementations drift, PPO computes its importance ratio
-against a distribution the actor never used - the run silently fails to learn and
-nothing reports an error. So this is checked numerically rather than assumed.
-
-Produce the input with:
-    .\\tools\\train.ps1 -Batches 1 -Sync 0 -BatchSize 8 -ObsDump 300 -Wait
-
-Then:
-    python tools/check_obs.py
-"""
+"""Verify rollout.py rebuilds observations identically to csai_track.inc."""
 
 import os
 import sys
@@ -25,11 +12,8 @@ CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\
 DUMP = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\out\obsdump.txt")
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 
-
 def _map_name():
-    """Which map to verify. Was hardcoded, so checking parity on a new map meant
-    editing this file - and parity is the one guard against the learner silently
-    training on observations the actor never produced."""
+    """Which map to verify. Was hardcoded, so checking parity on a new map meant"""
     for i, a in enumerate(sys.argv):
         if a == "--map" and i + 1 < len(sys.argv):
             return sys.argv[i + 1]
@@ -43,10 +27,8 @@ def _map_name():
         pass
     return "surf_demise"
 
-
 MAP = _map_name()
 TRACK = os.path.join(DATA, "%s_track.txt" % MAP)
-
 
 def main():
     if not os.path.exists(DUMP):
@@ -78,11 +60,6 @@ def main():
     vel = data[:, 3:6]
     plugin_obs = data[:, 6:6 + OBS_DIM]
 
-    # Full scan here: if this agrees with the plugin's windowed search, both the
-    # observation math and the nearest-point search match.
-    # Only the centerline half is recomputed here. The probe needs engine
-    # collision, so it is logged in the trajectory and copied through - there is
-    # nothing to cross-check, and comparing it would just compare zeros.
     n_center = 7 + 3 * LOOKAHEAD
     mine = np.zeros_like(plugin_obs)
     for i in range(len(rows)):
@@ -92,18 +69,6 @@ def main():
 
     diff = np.abs(mine - plugin_obs)
 
-    # Two different error scales, and conflating them hides real bugs:
-    #
-    #  * TYPICAL rows differ only by the %.6f dump formatting -> ~1e-6.
-    #  * A FEW rows sit on a projection tie. Track_Project picks the nearer of the
-    #    two segments adjacent to the nearest point; when those distances are
-    #    nearly equal (measured: 91.226389 vs 91.226551, a 1.6e-4 gap) float32 in
-    #    the plugin and float64 here pick different segments, shifting `closest`
-    #    and hence the offset columns by ~1e-4.
-    #
-    # A tie is benign: it perturbs an O(1) network input by 1e-4. Systematic
-    # drift is not. So gate on the median (must be formatting-level) and cap the
-    # worst case, rather than applying one loose tolerance to everything.
     tol_typical = 2e-5      # p99 must stay at formatting level
     tol_worst = 5e-4        # isolated projection ties
 
@@ -137,7 +102,6 @@ def main():
 
     print("\nobservation parity OK")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

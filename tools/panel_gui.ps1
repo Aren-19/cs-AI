@@ -1,17 +1,3 @@
-<#
-    CsAI control panel.
-
-    One window instead of twenty. Everything training starts - the daemon, the
-    learner, the game servers, the eval, the replay viewer - runs with its
-    console hidden, and this lists them live. Double-click a row, or use the
-    show button, to bring that one console up when you want to read it, and
-    again to put it away.
-
-    The consoles are hidden, not suppressed. A process started hidden still has
-    a window; it just reports MainWindowHandle = 0, because that only counts
-    windows that are visible. So the handle is found by walking every top-level
-    window and matching the process id, which finds it either way.
-#>
 param([switch]$NoAutoRefresh, [switch]$SelfTest)
 
 $ErrorActionPreference = 'Stop'
@@ -63,9 +49,6 @@ function Show-ProcWindow([int]$procId, [bool]$show) {
         [void][CsAI.Win]::ShowWindowAsync($h, 5)
         [void][CsAI.Win]::SetForegroundWindow($h)
     } else {
-        # The synchronous call for hiding, so the list reports the new state on
-        # this pass rather than the old one. Showing stays async: it can wait a
-        # tick, and it will not block on a window that is busy.
         [void][CsAI.Win]::ShowWindow($h, 0)
     }
     return $true
@@ -312,10 +295,6 @@ $bFolder.Add_Click({ Start-Process $Root })
 $script:PrevCpu = @{}
 $script:PrevAt = Get-Date
 
-# Processes this panel has already put away once. A game server opens its own
-# console the moment it starts - six of them, plus one per eval - which is the
-# whole reason this window exists. They get hidden the first time they are seen
-# and never again, so bringing one up by hand keeps it up.
 $script:Tidied = @{}
 
 function Update-Panel {

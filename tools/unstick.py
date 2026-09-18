@@ -1,36 +1,4 @@
-"""
-Find what the policy is stuck on, work out what clears it, and teach it.
-
-Reinforcement learning improves by comparing better outcomes against worse ones.
-When every episode ends in the same place there is nothing to compare, no
-gradient exists, and more training cannot help however long it runs. On
-surf_demise that happened at a drop 72% along: best progress sat between 73.02%
-and 73.07% for a hundred generations - roughly 9600 episodes, not one of which
-got past - while the policy put a probability of 0.0014 on the action that
-actually works and chose it 0% of the time. A saturated policy cannot sample its
-way out, so raising entropy globally did nothing either.
-
-The way out was mechanical, and this is that procedure with the human removed:
-
-  1. find where runs end, from real evaluation runs
-  2. take the replay checkpoint just before that
-  3. force each action in turn from that checkpoint and measure how far it gets
-  4. if one clearly beats what the policy does, teach it on states in that
-     stretch, anchoring the rest of the map to the policy's own current choices
-  5. verify against a full run, and keep the change only if it helped
-
-Nothing here knows anything about a particular map. The checkpoints come from the
-user's own recorded runs, the action set comes from the build, and which action
-wins is measured rather than assumed - on surf_demise phi 92 clears the drop and
-phi 95, 100 and 110 are all worse, which no amount of reasoning would have told
-us.
-
-    python tools/unstick.py                 # diagnose and fix, verifying as it goes
-    python tools/unstick.py --dry-run       # measure and report, change nothing
-
-Stop training first: this rewrites the checkpoint, and a running learner will
-overwrite it mid-edit.
-"""
+"""Find the action that clears an obstacle, teach it, verify, roll back on failure."""
 
 import argparse
 import os
@@ -58,7 +26,6 @@ N_TRIMS = (N_ACTIONS - 1) // 2          # the last action is coast
 PROBE_PORT = "27500"
 PROBE_ACTOR = "9"
 
-
 # --------------------------------------------------------------- running ----
 
 def run_srcds(extra, timeout=600):
@@ -71,9 +38,6 @@ def run_srcds(extra, timeout=600):
             "+csai_bench_timescale", "20", "+csai_bench_quit", "1",
             "+csai_bench_delay", "8"] + extra
 
-    # Started through Start-Process, not directly: srcds exits immediately when
-    # launched with -console and its stdin redirected, which is what running it
-    # as an ordinary subprocess does.
     quoted = ",".join("'%s'" % a.replace("'", "''") for a in args)
     ps = ("$p = Start-Process -FilePath '%s' -ArgumentList @(%s) "
           "-WorkingDirectory '%s' -PassThru -WindowStyle Hidden; "
@@ -90,7 +54,6 @@ def run_srcds(extra, timeout=600):
     with open(CONLOG, "rb") as fh:
         fh.seek(start)
         return fh.read().decode("utf-8", "replace")
-
 
 def batch_run(map_name, frameskip, lo, hi, episodes=16, side=0, trim=-1,
               obsdump=0, budget=6000, deviation=600, devcost=0.5):
@@ -109,7 +72,6 @@ def batch_run(map_name, frameskip, lo, hi, episodes=16, side=0, trim=-1,
     m = re.search(r"batch 0 gen \d+ \| eps \d+ \(mid \d+\) \| return [\d.-]+ \| progress ([\d.]+)%", log)
     return float(m.group(1)) if m else None
 
-
 def eval_runs(map_name, frameskip, runs=5, devcost=0.5):
     """Full runs from the start. Returns the progress each one reached."""
     log = run_srcds(["+map", map_name, "+csai_eval", str(runs),
@@ -117,7 +79,6 @@ def eval_runs(map_name, frameskip, runs=5, devcost=0.5):
                      "+csai_devcost", str(devcost), "+csai_prestrafe", "1",
                      "+csai_budget", "6000", "+csai_deviation", "600"])
     return [float(x) for x in re.findall(r"eval run \d+/\d+: \w+ at ([\d.]+)%", log)]
-
 
 # ------------------------------------------------------------ checkpoints ----
 
@@ -131,19 +92,12 @@ def checkpoints(map_name):
             if not line or line.startswith("#"):
                 continue
             rows.append([float(x) for x in line.split()])
-    # Full scan per checkpoint, not a carried hint. Track.nearest is the plugin's
-    # WINDOWED search ([hint-16, hint+64]); checkpoints are further apart than
-    # that window, so a carried hint falls progressively behind - the last
-    # checkpoint read 88.6% instead of 100.0%. These numbers choose which
-    # checkpoint to practise from, so being 11 points out aims the whole tool at
-    # the wrong part of the map.
     out = []
     for r in rows:
         idx = tr.nearest(r[3:6], -1)
         s, _, _ = tr.project(r[3:6], idx)
         out.append((r[1], 100.0 * s / tr.length))
     return out, tr
-
 
 def load_dump(path, tr):
     rows = [[float(x) for x in l.split()] for l in open(path) if len(l.split()) > 7]
@@ -154,10 +108,6 @@ def load_dump(path, tr):
     hint = -1
     prev = None
     for p in a[:, 0:3]:
-        # An obsdump concatenates many episodes, each teleporting back to the
-        # checkpoint. Carrying the hint across that boundary left it at the
-        # previous episode's death point, and the forward-biased window never
-        # recovers: 81% of rows came out wrong, by up to 98 percentage points.
         if prev is None or float(np.linalg.norm(p - prev)) > 200.0:
             hint = -1
         prev = p
@@ -165,7 +115,6 @@ def load_dump(path, tr):
         s, _, _ = tr.project(p, hint)
         prog.append(100.0 * s / tr.length)
     return a[:, 6:], np.array(prog)
-
 
 # ----------------------------------------------------------------- policy ----
 
@@ -175,7 +124,6 @@ def load_policy(ckpt):
     for i, p in enumerate(pol.params()):
         p[...] = z["p%d" % i]
     return pol, z
-
 
 def teach(pol, Xteach, action, Xanchor, epochs=150, lr=1e-4, anchor_weight=3.0):
     """Push one action at the stuck states; hold everything else where it is."""
@@ -200,21 +148,16 @@ def teach(pol, Xteach, action, Xanchor, epochs=150, lr=1e-4, anchor_weight=3.0):
     P = np.exp(log_softmax(pol.forward(Xteach)[0]))
     return P[:, action].mean(), kept
 
-
 def save(ckpt, weights, pol, z):
     out = {"gen": int(z["gen"])}
     for k in ("ret_mean", "ret_var", "ret_count"):
         if k in z:
             out[k] = float(z[k])
     out.update({"p%d" % i: p for i, p in enumerate(pol.params())})
-    # len(), not a literal: writing range(4) here dropped the critic's output
-    # layer (v4/v5), and learn.py --resume then died with KeyError on every
-    # restart for 90 minutes while the panel reported training as healthy.
     nval = len(Value(np.random.default_rng(0)).params())
     out.update({"v%d" % i: z["v%d" % i] for i in range(nval)})
     np.savez(ckpt, **out)
     write_weights(weights, pol, int(z["gen"]))
-
 
 # ------------------------------------------------------------------- main ----
 
@@ -255,10 +198,6 @@ def main():
     if not before:
         print("no evaluation runs completed - is the map or the build wrong?")
         return 1
-    # The frontier is where the BEST run dies, not the typical one. A policy with
-    # a shaky approach produces a wide spread, and the median then points at a
-    # stretch it can already pass on a good day rather than at the thing actually
-    # capping it.
     stuck = float(max(before))
     print("  full runs reached: %s" % ", ".join("%.1f%%" % v for v in before))
     print("  furthest any run got: %.1f%% of the track" % stuck)
@@ -342,9 +281,6 @@ def main():
     after = eval_runs(args.map, args.frameskip, args.verify_runs)
     print("  before: %s" % ", ".join("%.1f%%" % v for v in before))
     print("  after : %s" % ", ".join("%.1f%%" % v for v in after))
-    # Judged on the frontier, not the average. The point of teaching is to get
-    # PAST a wall that nothing was crossing; the approach it costs is what
-    # training repairs afterwards, given a gradient it did not have before.
     if after and max(after) > max(before) + 0.5:
         print("  kept: furthest run %.1f%% -> %.1f%% (mean %.1f%% -> %.1f%%)"
               % (max(before), max(after),
@@ -359,7 +295,6 @@ def main():
     pol, z = load_policy(args.ckpt)
     write_weights(args.weights, pol, int(z["gen"]))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

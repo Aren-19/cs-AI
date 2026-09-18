@@ -1,26 +1,3 @@
-/**
- * csai_replay - write the bot's run as a real shavit .replay file.
- *
- * The web viewer parses shavit's format, not ours. Our training trajectories are
- * a different thing entirely: one record per *agent step* (frame-skipped), with
- * no view angles, because the learner does not need them. A replay needs every
- * tick, with angles and buttons, or playback stutters and the camera has nothing
- * to point.
- *
- * So recording is separate from training logging: this captures the full per-tick
- * frame during evaluation runs, and writes the exact v9 layout that
- * addons/sourcemod/scripting/include/shavit/replay-file.inc defines.
- *
- * Header (little-endian, no padding):
- *   "<version>:<format>\n"   ASCII line
- *   map (NUL-terminated), style u8, track u8, preframes i32
- *   frameCount i32, time f32, steamid i32, postframes i32, tickrate f32
- *   zoneOffset[0] f32, zoneOffset[1] f32
- * Frame (40 bytes):
- *   pos[3] f32, ang[2] f32, buttons i32, flags i32, movetype i32,
- *   mousexy i32 (packed shorts), vel i32 (fwd|side packed shorts)
- */
-
 #if defined _csai_replay_included
 	#endinput
 #endif
@@ -77,10 +54,6 @@ stock void Rec_Tick(int client, int buttons)
 	g_hRecFrames.PushArray(row, REC_CELLS);
 }
 
-/**
- * Write the buffer out. `seconds` is the run time the HUD shows; pass the
- * episode's own elapsed time so the scrubber matches reality.
- */
 stock bool Rec_Save(const char[] tag, float seconds)
 {
 	if (g_hRecFrames == null || g_hRecFrames.Length == 0)
@@ -115,9 +88,6 @@ stock bool Rec_Save(const char[] tag, float seconds)
 	f.WriteString(head, false);
 	f.WriteString(map, true);
 
-	// The prestrafe is stored as preframes, exactly as a timer does: the viewer
-	// then plays the complete run - stationary start, prestrafe, handover, surf -
-	// while the timed portion stays the part the policy is responsible for.
 	int pre = g_iRecPreFrames;
 	if (pre > frames) pre = frames;
 

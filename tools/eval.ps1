@@ -1,17 +1,3 @@
-<#
-    Greedy evaluation of the current policy.
-
-    Training reports progress *gained* from random checkpoints, which is the right
-    learning signal but says nothing about whether the agent can run the map.
-    This answers that: argmax actions, always from state 0, reporting how far it
-    gets and in what time.
-
-    The number to beat is whatever clean_time the map's states file carries -
-    39.045 s for surf_demise. The eval prints it alongside its own best.
-
-    Usage:
-        .\tools\eval.ps1 -Runs 5
-#>
 param(
     [int]$Runs       = 5,
     [double]$Timescale = 20,
@@ -21,15 +7,8 @@ param(
     [int]$TimeoutSec = 600,
     [int]$Scripted   = 0,
     [int]$Greedy     = 1,
-    # This must match what the policy was TRAINED with, and it is not checked
-    # anywhere. When they differed - this said 2 while training ran at 6 - every
-    # eval replay drove the policy at three times its own decision rate, and the
-    # only symptom was an eval score that made no sense next to training.
-    # The daemon passes its own value; if you run this by hand, read the -FrameSkip
-    # the daemon was started with (Get-CimInstance Win32_Process) rather than
-    # trusting this default.
     [int]$PreLearn   = 0,
-    [int]$FrameSkip  = 2,
+    [int]$FrameSkip  = 2,   # must match what the policy was trained with
     [double]$DevCost = 0.5,
     [double]$SwitchCost = 0.15
 )
@@ -40,9 +19,6 @@ $GameRoot = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source
 $Srcds    = Join-Path $GameRoot 'srcds_win64.exe'
 $ConLog   = Join-Path $GameRoot 'cstrike\console.log'
 
-# The daemon's training actor writes the same console.log, and on Windows it
-# holds the file open - deleting it silently fails and leaves stale content that
-# reads as this run's output. Note the length instead and report only new lines.
 $startLen = 0
 if (Test-Path $ConLog) { $startLen = (Get-Item $ConLog).Length }
 
@@ -58,9 +34,6 @@ $a = @(
     '+csai_evalgreedy', $Greedy,
     '+csai_scripted', $Scripted,
     '+csai_prestrafe', '1',
-    # Batch files are named a<actor>_batch_NNNN.bin. Without this, an eval is
-    # actor 0 - the same name the first training actor writes under - and any
-    # batch it flushed would land on top of a live actor's file.
     '+csai_actor', '99',
     '+csai_prelearn', $PreLearn,
     '+csai_budget', $Budget,
@@ -84,10 +57,6 @@ if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
 if (Test-Path $ConLog) {
     $fs = [IO.File]::Open($ConLog, 'Open', 'Read', 'ReadWrite')
     try {
-        # If the log SHRANK (rotated, replaced), startLen is past the end and
-        # seeking is wrong - but so is reading from 0, which reports the whole
-        # history including previous runs as this run's result. Start at 0 only
-        # when the file is genuinely shorter, and say so.
         if ($startLen -le $fs.Length) {
             $null = $fs.Seek($startLen, 'Begin')
         } else {

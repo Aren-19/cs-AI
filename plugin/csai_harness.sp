@@ -1,17 +1,3 @@
-/**
- * csai_harness - Milestone 0 harness for the CS:S surf AI project.
- *
- * Proves the four things the whole project rests on:
- *   1. full tick-rate control of a fake client via OnPlayerRunCmd
- *   2. per-tick state readout (position, velocity, view, ground flag, surface normal)
- *   3. cheap savestate / restore (surf state is just origin+angles+velocity)
- *   4. how many ticks/second this machine can actually simulate
- *
- * The built-in controller is a speed-optimal air strafe, so a correct harness
- * shows horizontal speed climbing on its own. That makes the test self-verifying.
- *
- * Server console commands (all prefixed csai_).
- */
 #include <sourcemod>
 #include <sdktools>
 #include <cstrike>
@@ -85,11 +71,6 @@ ConVar    g_cvTimescale;
 ConVar    g_cvFpsMax;
 ConVar    g_cvCheats;
 
-// The poll timer carries TIMER_FLAG_NO_MAPCHANGE, so a map change kills it -
-// and OnPluginStart, which created it, runs only once per load. After one map
-// change the plugin would sit there loaded and inert, answering commands but
-// never picking up new weights or closing a batch. Kept in a handle so
-// OnMapStart can put it back without ever running two.
 Handle    g_hPollTimer      = null;
 
 // ----------------------------------------------------------------- init ----
@@ -101,9 +82,6 @@ public void OnPluginStart()
     g_cvFpsMax    = FindConVar("fps_max");
     g_cvCheats    = FindConVar("sv_cheats");
 
-    // An empty dedicated server hibernates and stops simulating ticks entirely,
-    // which stalls timers and makes any headless run impossible. Our only client
-    // is a fake one, so hibernation must be off before anything else happens.
     ConVar hib = FindConVar("sv_hibernate_when_empty");
     if (hib != null)
     {
@@ -111,11 +89,6 @@ public void OnPluginStart()
         PrintToServer("[CsAI] sv_hibernate_when_empty -> 0");
     }
 
-    // These exist so a run can also be armed at runtime (rcon / console). The
-    // srcds command line is read separately in OnConfigsExecuted: the engine
-    // rejects "+csai_bench_ticks 3000" at startup with "Unknown command" because
-    // the cvar does not exist until this plugin loads, and it does NOT queue the
-    // value for later. Parsing the raw command line is the reliable path.
     g_cvBenchTicks = CreateConVar("csai_bench_ticks", "0",
         "Ticks to simulate on map start. 0 = benchmark disabled.");
     g_cvBenchScale = CreateConVar("csai_bench_timescale", "1.0",
@@ -160,10 +133,6 @@ public void OnPluginStart()
     PrintToServer("[CsAI] harness %s loaded", CSAI_VERSION);
 }
 
-/**
- * Fires after server.cfg has run, which is exactly when the command-line cvar
- * values are settled and it is safe to start a scripted run.
- */
 public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 {
     int client = GetClientOfUserId(event.GetInt("userid"));
@@ -178,10 +147,6 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast
 
 public void OnMapEnd()
 {
-    // TIMER_FLAG_NO_MAPCHANGE means SourceMod has already killed this timer and
-    // freed the handle. Dropping our reference is all that is wanted - calling
-    // KillTimer on it here would be an error - and it is what lets OnMapStart
-    // tell "gone, recreate it" from "still running, leave it alone".
     g_hPollTimer = null;
 }
 
@@ -205,9 +170,6 @@ public void OnMapStart()
 
     LoadStates();
 
-    // Here, not in OnPluginStart: the reference time comes out of the states
-    // file, which LoadStates has only just read. Printed against g_fRefTime = 0
-    // this worked example would have been confidently wrong in the log.
     if (g_fRefTime > 0.0)
         PrintToServer("[CsAI] reward: a finish pays %.1f at the reference %.3fs, %.1f at 40.0s, %.1f at 42.0s, %.1f at 50.0s (a fall pays -1.0)",
                       g_fFinishBonus, g_fRefTime,
@@ -216,25 +178,11 @@ public void OnMapStart()
                       g_fFinishBonus * Pow(g_fRefTime / 50.0, g_fTimePower));
     Track_Load();
 
-    /**
-     * Re-derive each checkpoint's position along the TRACK.
-     *
-     * The states file stores `frac` as the frame index over the frame count -
-     * how far through the run in TIME, not in distance. The run is far slower at
-     * the start than the end, so the two diverge by up to 11 points: the
-     * checkpoint stored as 0.739 sits at 66.3% of the track, and 0.826 sits at
-     * 76.9%. Every -StateLo/-StateHi ever passed therefore selected a band about
-     * seven points earlier than whoever typed it intended.
-     *
-     * A full scan, not the windowed one: these are isolated points with no prior
-     * hint, and surf_demise teleports 2.5 s in, so a hint chained from the
-     * previous checkpoint cannot follow it. Chained, the last five checkpoints
-     * read 1120 to 14616 units off a line they are actually sitting on.
-     */
     if (g_iTrackCount > 0)
     {
         for (int i = 0; i < g_iStateCount; i++)
         {
+            // -1 = full scan: isolated points, and a map teleport outruns the window
             int ti = Track_Nearest(g_fStateOrigin[i], -1);
             if (ti < 0)
                 continue;
@@ -312,24 +260,12 @@ void ArmBenchmark()
     if (g_iFrameSkip < 1)
         g_iFrameSkip = 1;
 
-    // Echo what the reward actually ended up as, and what it pays for a finish
-    // at three real times. Every silent-parameter bug in this project would have
-    // been one line of log away from obvious: a forced side that parsed as 0
-    // because the parser rejects negatives, an eval driving the policy at three
-    // times its own decision rate, a batch marker that was never written. A
-    // setting you cannot see is a setting you are guessing at.
-    // One value per line, and no format flags beyond %f - SourcePawn's
-    // PrintToServer does not take "%+.1f", and rather than erroring it printed
-    // the spec literally and shifted every argument after it by one, so the
-    // floor read as 30 and the time cost as 5. The check caught its own bug on
-    // the first run, which is the argument for having it.
     PrintToServer("[CsAI] reward: finish %.1f x (reference / time) ^ %.1f, never below %.1f",
                   g_fFinishBonus, g_fTimePower, g_fFinishFloor);
     PrintToServer("[CsAI] reward: timecost %.3f per decision, devcost %.2f, switchcost %.2f, trimcost %.2f",
                   g_fTimeCost, g_fDeviationCost, g_fSwitchCost, g_fTrimCost);
     PrintToServer("[CsAI] wind-up: the policy drives the last %d tick(s) of it (0 = replay the recording whole)",
                   g_iPreLearned);
-
 
     char cmdline[512];
     GetCommandLine(cmdline, sizeof(cmdline));
@@ -371,9 +307,6 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
                              float angles[3], int &weapon, int &subtype, int &cmdnum,
                              int &tickcount, int &seed, int mouse[2])
 {
-    // Real players: observe only, never modify. This is how extra human runs
-    // get recorded; the timer will not supply them (one replay per map, kept
-    // only when you beat it).
     if (client != g_iBot && !IsFakeClient(client) && IsPlayerAlive(client))
     {
         Rec_Human_Track(client);
@@ -438,31 +371,6 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
     return Plugin_Changed;
 }
 
-/**
- * Source AirMove():
- *     wishspd      = min(|wishvel|, 30)              // AIR_SPEED_CAP
- *     currentspeed = velocity . wishdir
- *     addspeed     = wishspd - currentspeed
- *     accelspeed   = min(k, addspeed),  k = sv_airaccelerate * wishspeed * frametime
- *     velocity    += accelspeed * wishdir
- *
- * There are two regimes, and the optimal angle differs between them.
- *
- * Accel-capped (k < addspeed):
- *     |v'|^2 = speed^2 + 2*k*speed*cos + k^2          -> grows with cos
- *     capped only while cos <= (wishspd - k)/speed
- *
- * Uncapped (accelspeed == addspeed == wishspd - speed*cos):
- *     |v'|^2 = speed^2*(1 - cos^2) + wishspd^2        -> maximal at cos = 0
- *
- * Both agree at cos = (wishspd - k)/speed, so the optimum over the whole range is
- *     cos(theta*) = clamp((wishspd - k)/speed, 0, 1)
- *
- * The clamp floor of 0 matters: with sv_airaccelerate 150 and maxspeed 250,
- * k = 375 >> wishspd = 30, so (wishspd - k)/speed is strongly negative and the
- * bot is never capped. Clamping to [-1,1] instead of [0,1] yields theta = 180
- * degrees - thrusting straight backwards, which loses speed every tick.
- */
 float ComputeStrafeYaw(int client, const float velocity[3])
 {
     float speed  = SquareRoot(velocity[0] * velocity[0] + velocity[1] * velocity[1]);
@@ -750,11 +658,6 @@ public Action Cmd_Air(int args)
     return Plugin_Handled;
 }
 
-/**
- * Lifting blindly drops the bot inside the map's ceiling: the engine then shoves
- * it back to the floor within a few ticks, which looks exactly like "the strafe
- * does not work". Trace upward first and stop short of whatever we hit.
- */
 float LiftBot(int client, float requested)
 {
     float origin[3], up[3];
@@ -892,17 +795,8 @@ public Action Cmd_Status(int args)
     return Plugin_Handled;
 }
 
-/**
- * host_timescale and fps_max are what actually buy simulation speed. host_timescale
- * is FCVAR_CHEAT, but setting a ConVar through SourceMod bypasses the cheat gate
- * that applies to console dispatch - so this works regardless of sv_cheats, and
- * cannot be clobbered by server.cfg reloading sv_cheats 0.
- */
 void ApplyTimescale(float scale)
 {
-    // shavit-core hooks sv_cheats and forces it back to 0 (shavit_core_disable_sv_cheats,
-    // default 1). host_timescale is FCVAR_CHEAT, so that hook silently pins the server
-    // at 1x. Release the hook first; this is runtime-only and reverts on restart.
     ServerCommand("shavit_core_disable_sv_cheats 0");
     ServerCommand("sv_cheats 1");
     if (g_cvFpsMax != null)
@@ -925,14 +819,6 @@ public Action Cmd_Timescale(int args)
     ApplyTimescale(scale);
     return Plugin_Handled;
 }
-
-// ------------------------------------------------- scripted / headless ----
-//
-// csai_auto <ticks> <delay> <quit>
-//   Waits <delay> seconds after map load, spawns the bot, runs the air test for
-//   <ticks> ticks, then optionally quits the server. This is what the benchmark
-//   harness drives, so a throughput measurement is a single non-interactive run.
-
 
 public Action Cmd_Auto(int args)
 {
@@ -957,20 +843,10 @@ public Action Cmd_Auto(int args)
     return Plugin_Handled;
 }
 
-/**
- * CS:S round logic freezes players during freezetime and between rounds, which
- * silently produces a bot that reports MOVETYPE_WALK and simply never moves.
- * A training server must have round management out of the way entirely.
- */
 void SetupRound()
 {
     ServerCommand("sv_cheats 1");
 
-    // A training run must own the map for its whole life. shavit-mapchooser and
-    // shavit-timelimit will otherwise vote or rotate the map out from under the
-    // actor, which loses the track and start states; the actor then idles
-    // silently while the learner waits out its timeout. Unloading is
-    // runtime-only and reverts on restart, so the normal server is untouched.
     ServerCommand("sm plugins unload shavit-mapchooser");
     ServerCommand("sm plugins unload shavit-timelimit");
     ServerCommand("mp_freezetime 0");
@@ -1045,7 +921,6 @@ public Action Timer_AutoRun(Handle timer)
     StartRun(g_iAutoTicks, "bench");
     return Plugin_Stop;
 }
-
 
 // ------------------------------------------------------------- training ----
 public Action Timer_TrainPoll(Handle timer)
@@ -1175,12 +1050,6 @@ public Action Cmd_DemoCapture(int args)
     Demo_Begin(g_iBot);
     return Plugin_Handled;
 }
-
-
-// ------------------------------------------------------- recording runs ----
-//
-// Global forwards, so implementing them adds no load-time dependency on the
-// timer. Without it they never fire and the manual commands below still work.
 
 public Action Shavit_OnStart(int client, int track)
 {

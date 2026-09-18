@@ -1,33 +1,9 @@
-/**
- * csai_bot - the controlled fake client, and episode start states.
- *
- * Start states come from a human replay, parsed by tools/replay.py into a flat
- * text file (SourcePawn has no JSON parser). State 0 is the map's real start;
- * the rest are evenly spaced along the successful line so the agent can be
- * dropped part-way through the map without first solving everything before it.
- *
- * This lives in its own include because csai_episode.inc needs these globals,
- * and Pawn requires variables to be declared before use.
- */
-
 #if defined _csai_bot_included
 	#endinput
 #endif
 #define _csai_bot_included
 
 int g_iBot = -1;
-
-// ----------------------------------------------------------- start states ----
-//
-// Episode start states come from a human replay, parsed by tools/replay.py into
-// a flat text file (SourcePawn has no JSON parser). State 0 is the map's real
-// start; the rest are evenly spaced along the successful line and exist so the
-// agent can be dropped 80% of the way through the map without having to solve
-// the first 80% first. Surf state is fully described by origin+angles+velocity,
-// so each of these is a complete, restorable savestate.
-//
-// Only origin, angles and velocity are restored. The recorded `flags` field
-// carries engine bits we must not force onto a live player.
 
 #define MAX_STATES 64
 

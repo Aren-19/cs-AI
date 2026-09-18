@@ -1,35 +1,4 @@
-"""
-How often does the bot run the whole map, and how fast?
-
-The training log could not answer this. Its `finished` column counts every
-episode that reached the end, and 30% of episodes are spawned at a checkpoint
-three quarters of the way along - so a number that read "5 finishes" was mostly
-runs that started 10 seconds from the line. Its `best_progress` column is the
-share of the track an episode gained, which pins at 1.0 the moment the bot can
-run the map end to end and then never moves again. Between them they hid both
-the failure and the breakthrough: best_progress read 99.97% and flat for 150
-generations while the real end-to-end finish rate was climbing 14-fold.
-
-This counts only episodes that started at the beginning, and reports:
-
-    how many of them finished, how long those took against the human's run,
-    and where the rest of them died.
-
-    python tools/finishes.py            # read what is on disk now
-    python tools/finishes.py --append   # and add a row to data/finish_log.csv
-
-Prefer train_log.csv, which the learner writes: `runs_from_start`,
-`finished_from_start` and `best_full_run_s`, counted over every episode exactly
-once. This tool reads the batch files still sitting on disk, and that sample is
-biased downward - the learner deletes a batch as soon as it uses one, so what is
-left is mostly batches that were passed over for being stale, produced by a
-policy twelve or more generations old. Three readings twenty minutes apart gave
-0.8%, 20.0% and 67.9% while the learner's own count held steady near 69%.
-
-It is still the right tool for the question train_log.csv cannot answer - where
-the runs that did not finish actually ended - which is what the histogram below
-is for.
-"""
+"""Report end-to-end finish rate and times from the batch files on disk."""
 
 import argparse
 import datetime
@@ -50,7 +19,6 @@ DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 OUT = os.path.join(DATA, "out")
 TICKRATE = 66.67
 
-
 def reference_time(states_path):
     try:
         with open(states_path, encoding="utf-8-sig") as fh:
@@ -62,7 +30,6 @@ def reference_time(states_path):
     except (OSError, ValueError, IndexError):
         pass
     return None
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -78,9 +45,6 @@ def main():
         return 1
     ref = reference_time(os.path.join(DATA, "%s_states.txt" % args.map))
 
-    # Actor 99 is an eval run, not training. Its batch was being counted here as
-    # though it were, and because an eval writes eight runs in one go it could be
-    # the entire sample - one reading returned exactly the eval's own 6 of 8.
     files = [f for f in sorted(glob.glob(os.path.join(OUT, "*batch_*.bin")),
                                key=os.path.getmtime)
              if not os.path.basename(f).startswith("a99_")]
@@ -146,7 +110,6 @@ def main():
                         float(np.median(deaths)) if deaths else 0.0))
         print("appended to data/finish_log.csv")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

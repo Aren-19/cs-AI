@@ -1,30 +1,4 @@
-"""
-Watch an unattended run, and act when it stops getting anywhere.
-
-The failure this exists for: best progress sat between 73.02% and 73.07% for a
-hundred generations - about 9600 episodes, not one of which got past a drop at
-72% of surf_demise - while the policy put a probability of 0.0014 on the action
-that actually clears it and chose it 0% of the time. A saturated policy cannot
-sample its way out, so the run would have burned the whole night going nowhere
-and looked busy the entire time.
-
-So: if best progress has not improved by --improve over --window generations,
-stop training, run unstick.py (which finds what clears the obstacle and teaches
-it, rolling back on its own if a full run does not improve), and start training
-again.
-
-    python tools/autofix.py                 # watch and act
-    python tools/autofix.py --dry-run       # report what it would do
-
-Safety, because this edits a checkpoint with nobody watching:
-
-  * the checkpoint is copied before every attempt, to data/ckpt_autofix_<gen>.npz
-  * unstick.py verifies against full runs and restores its own backup if the
-    frontier did not move
-  * at most one attempt per --cooldown minutes, and --max-attempts in total
-  * if training does not come back up afterwards, it stops trying and says so
-  * everything, including every decision not to act, goes to logs/autofix.log
-"""
+"""Restart training through unstick.py when best progress stops moving."""
 
 import argparse
 import datetime
@@ -40,7 +14,6 @@ TRAIN_LOG = os.path.join(ROOT, "data", "train_log.csv")
 CKPT = os.path.join(ROOT, "data", "ckpt.npz")
 LOG = os.path.join(ROOT, "logs", "autofix.log")
 
-
 def say(msg):
     line = "%s  %s" % (datetime.datetime.now().strftime("%H:%M:%S"), msg)
     print(line, flush=True)
@@ -51,9 +24,7 @@ def say(msg):
     except OSError:
         pass
 
-
 FINISHING = 0.95   # an episode that gains this much of the track ran it end to end
-
 
 def rows():
     """(gen, best_progress, mean_progress) from the training log."""
@@ -79,25 +50,12 @@ def rows():
         pass
     return out
 
-
 def phase(data, window):
-    """Which number still has room to move?
-
-    best_progress is the share of the track an episode gained, so it stops dead
-    at 1.0 the moment the bot can run the map start to finish. From then on it
-    is pinned and reads as a permanent plateau. That is not a guess: at gen 2842
-    this fired with "best stuck at 99.97% for 150 generations" while the finish
-    rate was climbing from 1 generation in 97 to 14 in 52.
-
-    So while nothing finishes, watch the furthest anything got - that is the
-    wall this tool was built for. Once runs do finish, watch the average
-    instead, because what is left is doing it every time and doing it faster.
-    """
+    """Which number still has room to move?"""
     recent = data[-window:] if len(data) > window else data
     if any(b >= FINISHING for _, b, _ in recent):
         return "finishing", "average progress", [(g, m) for g, _, m in data]
     return "reaching", "best progress", [(g, b) for g, b, _ in data]
-
 
 def plateaued(series, window, improve, label):
     """Has `series` failed to improve over the last `window` generations?"""
@@ -113,17 +71,14 @@ def plateaued(series, window, improve, label):
     return True, ("%s stuck at %.2f%% for %d generations (%+.2f points)"
                   % (label, best_recent * 100, window, gain))
 
-
 def ps(args, timeout=900):
     return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass"] + args,
                           cwd=ROOT, timeout=timeout,
                           capture_output=True, text=True)
 
-
 def training_alive():
     r = subprocess.run(["tasklist"], capture_output=True, text=True)
     return r.stdout.lower().count("srcds_win64") > 0
-
 
 def stop_training():
     ps(["-File", os.path.join(HERE, "daemon.ps1"), "-Stop"], timeout=300)
@@ -132,7 +87,6 @@ def stop_training():
             return True
         time.sleep(5)
     return not training_alive()
-
 
 def start_training(daemon_args):
     subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -143,7 +97,6 @@ def start_training(daemon_args):
         if training_alive():
             return True
     return False
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -158,10 +111,6 @@ def main():
     ap.add_argument("--map", default="surf_demise")
     ap.add_argument("--frameskip", type=int, default=2)
     ap.add_argument("--dry-run", dest="dry", action="store_true")
-    # -Power high, not max. Eleven actors produce more than twice what the
-    # learner can consume, and take the cores it needs to consume them: six
-    # actors measured 38.5M steps/hour against eleven actors' 32.4M. Restarting
-    # into max would quietly halve the speed of whatever it was trying to fix.
     ap.add_argument("--daemon-args", dest="daemon_args", default=
                     "-Power high -FrameSkip 2 -StateMix 0.3 -StateLo 0.73 -StateHi 0.83 "
                     "-Entropy 0.01 -TimeCost 0.08 -TrimCost 0.05 -SwitchCost 0.40")
@@ -185,10 +134,6 @@ def main():
             continue
 
         if ph == "finishing":
-            # unstick.py finds the one action that clears an obstacle. There is
-            # no obstacle left - runs are reaching the end - so there is nothing
-            # for it to find, and stopping training to let it look costs four
-            # minutes of eleven actors for nothing.
             if time.time() - last_note >= args.cooldown * 60:
                 say("%s - but runs are finishing the map, so what is left is "
                     "consistency and time, not a wall. Training left alone." % why)
@@ -247,7 +192,6 @@ def main():
 
     say("watch finished after %.1f hours, %d attempt(s)" % (args.hours, attempts))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

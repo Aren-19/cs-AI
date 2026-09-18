@@ -1,34 +1,3 @@
-/**
- * csai_demo - capture behaviour-cloning data from the human run.
- *
- * Progress reward alone does not teach technique. It rewarded the policy for
- * micro-oscillating +-90 degrees every couple of ticks, because that tracks the
- * reference line more tightly than real surfing does: measured 19.79 side
- * switches per second against a human's 0.95, holding each side 2 ticks against
- * 39.5. That is not something more training fixes - it is what the reward asked
- * for.
- *
- * Cloning asks a different question: given this situation, what did the HUMAN
- * do? Their inputs contain all the technique the reward cannot express - holding
- * a key through a curve and steering with the view, not strafing through tight
- * ramp sections, strafing on long airborne stretches.
- *
- * Method: replay the recorded inputs through real physics so the bot travels the
- * human's actual trajectory, and at every decision boundary record
- *   (observation the policy would see, action the policy would have to take).
- *
- * The second half used to need care, because actions were TRANSITIONS (hold,
- * flip side, set trim) and the label had to be the move from our tracked state
- * toward the human's. Cloning could not fit that: val accuracy 0.166 against a
- * 0.724 always-HOLD baseline, because the same situation gets the label HOLD or
- * FLIP depending on a state the observation does not contain.
- *
- * Actions are now ABSOLUTE (side, trim), so the label is just the human's own
- * state, which the observation does predict - 0.959 val accuracy on side alone
- * against a 0.613 majority baseline. Their (side, trim) is recovered from the
- * wish angle: phi = wishYaw - velYaw, side = sign(phi), trim = side*phi - 90.
- */
-
 #if defined _csai_demo_included
 	#endinput
 #endif
@@ -37,19 +6,6 @@
 #define DEMO_MAX_TICKS 20000
 #define DEMO_MAX_FILES 32
 
-/**
- * Cloning one trajectory is the binding constraint: a single run gives ~1213
- * decisions, all on one line, so the policy has never seen a state it did not
- * arrive at perfectly and cannot recover from one. More recorded runs are the
- * direct fix, so capture takes a SET of them.
- *
- * Runs are held one at a time rather than all at once - 32 runs x 20000 ticks
- * would not fit - and every run appends to the same output file.
- *
- *   <map>_demo.txt      run 1
- *   <map>_demo_2.txt    run 2
- *   <map>_demo_<n>.txt  run n
- */
 int   g_iDemoFiles   = 0;     // how many runs exist on disk
 int   g_iDemoFileIdx = 0;     // which one is loaded right now
 
@@ -66,17 +22,6 @@ int   g_iDemoTrim   = 0;
 int   g_iDemoWrote  = 0;
 File  g_hDemoOut    = null;
 
-/**
- * Does this recording's tickrate match the server's?
- *
- * Playback feeds one recorded tick per server tick, so a 100-tick recording on a
- * 66-tick server holds every input 1.5x too long and reconstructs velocities
- * 1.5x wrong - the bot flies a different line while capture pairs those
- * observations with the human's actions. Nothing compared the two rates before;
- * surf_dune's replay really is 100 tick.
- *
- * Re-time it with:  python tools/setup_map.py <map>
- */
 stock bool Demo_TickrateOk(const char[] header)
 {
 	int at = StrContains(header, "tickrate=");
@@ -126,21 +71,6 @@ stock int Demo_CountFiles()
 	return n;
 }
 
-/**
- * Drop everything up to and including the last teleport in the prestrafe.
- *
- * A recording's rolling buffer starts before the player respawned, so it can
- * open wherever the previous attempt ended - mid-map, or past the finish - and
- * then jump thousands of units back to the start. Demo_Begin teleports the bot
- * to tick 0 and replays from there, so without this the bot begins the run in
- * completely the wrong place and every observation captured afterwards is paired
- * with a human action taken somewhere else entirely.
- *
- * Measured on the first batch of recordings: jumps of 18933 and 21772 units
- * inside the prestrafe. The clone trained on that data scored 1.1% against a
- * clean single run's 6.8%, which looked like an argument against using several
- * runs and was in fact this bug.
- */
 stock void Demo_TrimTeleports()
 {
 	int cut = -1;
@@ -242,12 +172,6 @@ stock bool Demo_LoadIndex(int which)
 	return g_iDemoCount > 0;
 }
 
-/**
- * Fill the prestrafe sets from every recorded run.
- *
- * Reuses the demo loader so the teleport trimming applies here too - without it
- * a prestrafe would begin wherever the previous attempt ended.
- */
 stock void Pre_BuildFromDemos()
 {
 	g_iPreSets = 0;
@@ -312,13 +236,6 @@ stock void Demo_Load()
 	              g_iDemoFiles, g_iDemoCount, g_iDemoPre);
 }
 
-/**
- * The human's absolute (side, trim) at this tick.
- *
- * wishdir is the view's right vector when sidemove > 0 and its left vector when
- * sidemove < 0, so phi = wishYaw - velYaw and, since phi = side * (90 + trim),
- * trim = side * phi - 90.
- */
 stock bool Demo_HumanState(int idx, const float vel[3], int &side, int &trim)
 {
 	int b = g_iDemoButtons[idx];
@@ -444,10 +361,6 @@ stock bool Demo_Tick(int client, int &buttons, float movement[3], float angles[3
 
 	int idx = g_iDemoIndex;
 
-	// A recorded run can still jump: a staged map restarts the player at the
-	// next stage, and even the cleaned line is only contiguous within a segment.
-	// Replaying those ticks as ordinary input would fly the bot at a wall for a
-	// second and capture garbage, so resynchronise onto the recording instead.
 	if (idx > 0)
 	{
 		float dx = g_fDemoPos[idx][0] - g_fDemoPos[idx - 1][0];
@@ -476,7 +389,6 @@ stock bool Demo_Tick(int client, int &buttons, float movement[3], float angles[3
 			g_iTrackHint = -1;          // full search: we are somewhere new
 		}
 	}
-
 
 	// capture at the policy's own decision cadence, and only over the timed part
 	if (idx >= g_iDemoPre && ((idx - g_iDemoPre) % g_iFrameSkip) == 0 && g_hDemoOut != null)
@@ -517,7 +429,7 @@ stock bool Demo_Tick(int client, int &buttons, float movement[3], float angles[3
 			g_hDemoOut.WriteLine("%s", line);
 			g_iDemoWrote++;
 
-			// advance our tracked state exactly as the policy would
+			// advance the tracked state exactly as the policy would
 			Pol_ApplyAction(action, g_iDemoSide, g_iDemoTrim);
 		}
 	}

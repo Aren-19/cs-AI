@@ -1,24 +1,3 @@
-/**
- * csai_prestrafe - replay the recorded pre-timer inputs before handing control
- * to the policy.
- *
- * A surf run begins with a prestrafe: W plus a strafe key while turning, which
- * builds speed above the ground cap before you drop onto the first ramp.
- * Measured on the reference run: 67 ticks, 0 -> 286 u/s, buttons 1032
- * (IN_MOVERIGHT | IN_FORWARD).
- *
- * The policy cannot produce that. Its action space is the air-strafe angle with
- * no forward movement, by design - that choice is what took the usable-control
- * fraction from 2.1% to 100% at speed. Adding W back to serve one second at the
- * start would widen the space everywhere for no benefit in the air.
- *
- * So the prestrafe is replayed from the human record through real physics: the
- * bot is teleported to the recorded start, the recorded inputs are fed tick by
- * tick, and the policy takes over at the handover point with whatever state the
- * physics produced. Nothing about the prestrafe enters the training signal - the
- * episode's progress baseline is set at handover, not before.
- */
-
 #if defined _csai_prestrafe_included
 	#endinput
 #endif
@@ -27,19 +6,6 @@
 #define PRE_MAX_TICKS 512
 #define PRE_MAX_SETS   16
 
-/**
- * Several recorded prestrafes, one picked per episode.
- *
- * The single replayed prestrafe was 67 ticks against the human's real 63-113, so
- * it looked clipped - the bot appeared at the start line already moving instead
- * of winding up. Every recorded run carries its own prestrafe, so they are all
- * kept and sampled.
- *
- * Variety here is worth more than looks. Each one hands over at a slightly
- * different position, speed and angle (282-286 u/s across the set), so the
- * policy stops seeing one fixed opening state and has to handle a spread of
- * them - the same reason a fixed start makes a brittle policy.
- */
 float g_fPreAngSet[PRE_MAX_SETS][PRE_MAX_TICKS][2];
 int   g_iPreBtnSet[PRE_MAX_SETS][PRE_MAX_TICKS];
 float g_fPreStartSet[PRE_MAX_SETS][3];
@@ -54,20 +20,7 @@ float g_fPreStart[3];
 float g_fPreStartAng[3];
 int   g_iPreCount   = 0;
 
-/**
- * How many ticks at the END of the wind-up the policy drives itself.
- *
- * 0 replays the whole recording, which is what every run up to gen 8800 did.
- * Measured at that point: with a deterministic policy the map is run identically
- * every time - five runs of one opening agreed tick for tick - and the entire
- * spread in finish time came from WHICH recorded opening was drawn, 39.52 s for
- * the best against 40.20 s for the worst, with one that failed outright. The
- * opening was the only part of the run nothing was optimising.
- *
- * Grown a few ticks at a time. The states near the handover are ones the policy
- * already knows; the states at the very start of a wind-up, stationary on the
- * ground, are ones it has never seen in 8800 generations.
- */
+// Trailing ticks of the wind-up the policy drives. Measured worse above 16.
 int   g_iPreLearned = 0;
 
 bool  g_bPrestrafeEnabled = true;
@@ -167,20 +120,7 @@ stock void Pre_Select(int which)
 
 stock bool Pre_Begin(int client)
 {
-	// Evaluation takes the longest recorded wind-up: deterministic, so runs stay
-	// comparable, and it is the one that looks like a real approach rather than
-	// the bot appearing at the line already moving. Training samples all of them
-	// so the policy sees a spread of opening states.
 	if (g_iPreSets > 0)
-		// Evaluation CYCLES the recorded prestrafes; training samples them.
-		//
-		// It used to always take the longest, which is one of eight the policy
-		// trains against - so the reported number described a single opening
-		// state rather than the distribution it actually faces. That is not a
-		// small effect: changing only which prestrafe an eval used once took the
-		// same policy from 72.4% to 11.3%. Cycling by run index keeps the runs
-		// deterministic and reproducible while covering the same spread training
-		// sees.
 		Pre_Select(g_bEval ? (g_iEvalDone % g_iPreSets)
 		                   : RoundToFloor(Pol_Rand() * float(g_iPreSets)));
 
@@ -196,14 +136,6 @@ stock bool Pre_Begin(int client)
 	return true;
 }
 
-/**
- * Feed one recorded tick. Returns false once the record is exhausted, which is
- * the handover moment.
- *
- * The record stores buttons, not the analogue move values, so forwardmove and
- * sidemove are synthesised from the keys at the standard 450 - which is what the
- * client would have sent.
- */
 stock bool Pre_Tick(int &buttons, float movement[3], float angles[3])
 {
 	if (!g_bPreActive || g_iPreIndex >= g_iPreCount)

@@ -1,15 +1,3 @@
-<#
-    Launch a headless training actor (66 tick, matching start_66.bat).
-
-    -Sync 1 (default) makes the actor wait for a new policy from the Python
-    learner between batches. -Sync 0 collects continuously with whatever policy
-    it has, which is what you want for throughput measurement and for checking
-    the data path before a learner exists.
-
-    Usage:
-        .\tools\train.ps1 -Batches 2 -Sync 0 -Timescale 80
-        .\tools\train.ps1 -Batches 200            # sync, waits for the learner
-#>
 param(
     [int]$Batches    = 2,
     [int]$Sync       = 0,

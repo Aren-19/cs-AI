@@ -1,14 +1,3 @@
-<#
-    Compile the CsAI plugin(s) with the server's own SourceMod compiler and
-    deploy the .smx into the live server.
-
-    Never install a downloaded .smx here: this server is a Windows-x64 build and
-    pre-64-bit binaries use the old ABI. Always compile from source, with the
-    compiler that ships alongside the server's SourceMod.
-
-    Usage:  .\tools\build.ps1            # compile + deploy
-            .\tools\build.ps1 -NoDeploy  # compile only
-#>
 param(
     [switch]$NoDeploy
 )

@@ -1,191 +1,162 @@
 # cs-AI
 
-A bot that teaches itself to surf in Counter-Strike: Source.
+A bot that learns to surf in Counter-Strike: Source by practising a map on its own.
 
-It watches your recorded runs to learn the basic technique, then practises the
-map over and over on its own, trying to get further and faster each time. The
-idea is the same as the Trackmania bots that learn a track by repetition.
+It starts from a recorded run to pick up the basic technique, then repeats the map
+until it gets further and faster. The approach is the same one used by the
+Trackmania bots that learn a track by repetition.
 
-On surf_demise it now gets to the end, in about 39.6 seconds against a hand-made
-39.04.
+## Safety
 
-## Read this first
+Training runs only on a local LAN server started with `-insecure`. Injecting
+inputs on a normal VAC-protected server breaks Valve's rules and risks a ban. No
+part of this should be pointed at a public server.
 
-Training only ever runs on a local LAN server started with `-insecure`. Feeding
-inputs to a normal, VAC-protected server would break Valve's rules and can get
-your account banned. Nothing here should ever be pointed at a public server.
+## Status
 
-## Where it is right now
+Map: surf_demise. Reference run: 39.04 seconds, set by hand.
 
-Map: surf_demise. The run to beat is 39.04 seconds, set by hand.
+The bot finishes the map. Eight runs from the start, one per recorded opening:
 
-It finishes the map. Out of eight runs from the start, seven get to the end, and
-the times sit in a tight band:
-
-| | bot | the human run |
+| | bot | reference |
 |---|---|---|
-| finishes the map | 7 runs out of 8 | yes |
-| best time | 39.59 s | 39.04 s |
-| typical time | 39.67 s | - |
-| strafe key changes | 0.81 per second | 1.05 per second |
-| time spent at a useful angle | 98.2% | 97.8% |
-| speed it holds | 3610 units/s | 3589 units/s |
+| runs that finish | 8 of 8 | - |
+| best time | 39.34 s | 39.04 s |
+| median time | 39.48 s | - |
+| strafe key changes | 0.76 per second | 1.05 per second |
+| time at a usable strafe angle | 98.1% | 97.8% |
+| median speed | 3603 units/s | 3589 units/s |
 
-So it surfs about as well as a person does, and it is roughly half a second off
-the pace. The key-swapping problem it used to have is gone: it used to change
-keys eight times a second, which scored well and looked nothing like surfing.
+Technique matches the reference run and the remaining gap is about three tenths
+of a second, spread evenly across the map rather than lost at any one point.
 
-What is left is the last half second, and that is harder than everything before
-it. Watching the runs, the bot is not losing time in any one place - it is a
-fraction slower everywhere.
+## Running
 
-## Running it
+Run `CsAI.bat`. It opens a single window that starts and stops training, sets how
+much of the machine to use, lists every process with its state, and opens replays
+and reports.
 
-Double-click `CsAI.bat`. That is the whole thing: one window that starts and
-stops training, changes how much of your computer it uses, lists everything that
-is running, and opens replays and reports.
+Training runs several game servers alongside a learner. All of them start with
+their console hidden, so the panel is the only window on screen. Double-clicking
+a row shows that console; double-clicking again hides it.
 
-Training runs several game servers plus a learner in the background. They all
-start hidden, so you get one window instead of a screen full of them. If you want
-to look inside one, double-click its row in the list and that console appears;
-double-click again and it goes away.
+Closing the panel does not stop training.
 
-Closing the panel does not stop training. It keeps going in the background, so
-you can start it and leave.
+`Viewer.bat` opens a 3D replay viewer in the browser.
 
-`Viewer.bat` opens a 3D replay viewer in your browser so you can watch what the
-bot actually did.
+[HOWTO.md](HOWTO.md) covers day-to-day use in more detail.
 
-There is more detail in [HOWTO.md](HOWTO.md).
+## Power levels
 
-## How much of your PC it uses
+Changeable at any time, including while training runs. Nothing already learned is
+lost.
 
-You can change this at any time, even while it is running, and nothing already
-learned is lost.
-
-| setting | game servers | when to use it |
+| setting | game servers | use |
 |---|---|---|
-| idle | 1 | you are gaming or watching something |
-| low | 2 | you are working on the PC |
+| idle | 1 | machine in use for gaming or video |
+| low | 2 | machine in use for work |
 | medium | 4 | background |
-| high | 6 | leave it here |
-| max | 11 | see below |
+| high | 6 | default |
+| max | 11 | not recommended, see below |
 
-**Max is not the fastest setting.** It was, on paper, and that turned out to be
-wrong when it was finally measured. The game servers were never the slow part.
-They were already producing more than twice the practice runs the learner could
-read, so most of it was thrown away unread, and the extra servers took the
-processor time the learner needed to read the rest. On a 12 core machine:
+Max is not the fastest setting. The game servers were never the bottleneck: at 11
+they produce more than twice the practice the learner can read, so most of it is
+discarded unread, and they take the processor time the learner needs for the
+rest. Measured on 12 logical cores:
 
-| | practice read per hour | thrown away |
+| | practice consumed per hour | discarded |
 |---|---|---|
 | 11 servers | 19.8 million steps | 55% |
 | 6 servers | 44.3 million steps | none |
 
-Twice the learning on half the machine. High is the default and there is no
-reason to move off it.
-
 ## How it works
 
-Every attempt is one run of the whole map, start to finish.
+Each attempt is one run of the whole map.
 
-1. Your recorded start is replayed first. Building up speed before the timer
-   starts is a different skill to surfing, and letting the bot learn that part
-   too was tried and made it slower, so it copies yours.
+1. The recorded opening is replayed first. Building speed before the timer starts
+   is a separate skill; letting the bot learn that part was tried and measured
+   slower, so it replays the recording instead.
 2. The bot takes over and surfs the rest.
-3. It gets a score for how far along the map it travelled, and for how long it
-   took if it got to the end. A little of that score feeds back into how it
-   steers next time.
+3. It scores on distance along the route, and on time if it reaches the end. That
+   score feeds back into how it steers.
 
-When you surf, the only thing that really matters is the angle between the way
-you are holding your keys and the way you are already moving. So that angle is
-the one thing the bot decides, a few times per second. Everything else, the mouse
-movement and which key is held, is worked out from that angle afterwards.
+In surf the only thing that matters is the angle between the held keys and the
+current direction of travel. That angle is the single decision the bot makes, a
+few times per second. Mouse movement and which key is held are derived from it.
 
-Before any of this, the bot copies a run of yours directly, so it starts out
-already surfing rather than flailing around. Without that first step it learns to
-twitch left and right very fast, which scores well but looks nothing like real
-surfing.
+Before any of that, the bot is fitted to a recorded run so it begins already
+surfing. Without that step it learns to alternate keys very fast, which scores
+well and looks nothing like surfing.
 
-## Using it on another map
+## Other maps
 
-Nothing in the bot knows about a particular map. Point it at one you have a
-recorded run for:
+Nothing in the bot is specific to a map. Given a recorded run:
 
 ```bash
 python tools/setup_map.py surf_dune
 ```
 
-That works out the route, the restart points and the run to learn from, all from
-your replay. The bot starts from nothing on a new map, the same way it did on the
-first one.
+This derives the route, the restart points and the run to learn from. A new map
+starts from scratch.
 
-## Teaching it with your own runs
+## Adding recordings
 
-This is the most useful thing you can do for it.
+More recordings are the single most useful addition. They do not need to be fast
+or clean: a run with a wobble and a recovery is worth more than another clean one,
+because recovery is the case with the least coverage.
 
-It has eight runs of yours on surf_demise now, and that made a real difference.
-More still help, and they do not need to be fast or clean. A messy run where you
-wobble and recover is worth more than another perfect one, because recovering is
-the part it sees least of.
+A recording is only useful if it stays near the route the bot is scored against.
+On surf_demise, four of the eight stray far enough off it that the bot would be
+counted as having fallen. `python tools/setup_map.py surf_demise --check` reports
+which.
 
-One thing worth knowing: a run is only useful if it stays near the route the bot
-is scored against. Four of the eight stray far enough off it that the bot would
-be counted as having fallen. They are fine to keep, but they are not good ones to
-copy technique from. `python tools/setup_map.py surf_demise --check` says which
-is which.
+[HOWTO.md](HOWTO.md) covers how to record them.
 
-See [HOWTO.md](HOWTO.md) for how to add them.
+## Layout
 
-## What is in here
-
-| folder | what it is |
+| folder | contents |
 |---|---|
-| `plugin/` | the server plugin that drives the bot and records what happened |
-| `tools/` | training, scoring, replay reading, reports |
-| `web/` | the local replay viewer |
-| `docs/` | notes on what was tried and what worked |
+| `plugin/` | server plugin: drives the bot, records episodes |
+| `tools/` | training, scoring, replay parsing, reports |
+| `web/` | local replay viewer |
+| `docs/` | record of what was tried and what worked |
 
-A few things in `tools/` you might run by hand:
+Tools that are run directly:
 
 | | |
 |---|---|
-| `setup_map.py <map>` | get a map ready from your replays, or `--check` what is wrong |
-| `finishes.py` | how often it gets to the end, and where the rest stop |
-| `compare.sh <gen>` | how the run since a change compares to before it |
+| `setup_map.py <map>` | prepare a map, or `--check` an existing setup |
+| `finishes.py` | finish rate and where unfinished runs stop |
+| `compare.sh <gen>` | results since a change against results before it |
 | `report.py` | writes `reports/latest.md` |
 
-`docs/experiments.md` is a running log of every change and whether it helped,
-including the ones that did not, which is most of them.
+`docs/experiments.md` records every change and whether it helped, including the
+ones that did not.
 
-## Credit for the viewer
+## Replay viewer
 
-The 3D replay viewer is not mine. It is built on two repos by offstyles, the
-people behind offstyles.net:
+The 3D replay viewer is third-party. It is built on two repositories by offstyles:
 
-- [offstyles/offstyles-web](https://github.com/offstyles/offstyles-web) - the site itself
+- [offstyles/offstyles-web](https://github.com/offstyles/offstyles-web) - the site
 - [offstyles/replay-viewer](https://github.com/offstyles/replay-viewer) - the in-browser map and replay renderer
 
-Neither is included here. `web/run.ps1` fetches them when you first run the
-viewer, and the only changes made are small ones to point them at your own files
-instead of the live site. Those changes are listed in [web/README.md](web/README.md).
+Neither is included here. `web/run.ps1` fetches them on first use, and the only
+modifications point them at local files instead of the live site. These are listed
+in [web/README.md](web/README.md).
 
 The renderer inside replay-viewer is a port of
-[noclip.website](https://github.com/magcius/noclip.website), which is MIT
-licensed.
+[noclip.website](https://github.com/magcius/noclip.website), which is MIT licensed.
 
-One thing to be aware of: neither offstyles repo has a licence file, so by
-default the authors keep all rights. Running a copy locally for yourself is
-normal. Putting a copy online is not something to do without asking them first.
-The map and texture files it loads are Valve's and come from your own game
-install, which is another reason this stays a local tool.
+Neither offstyles repository carries a licence file, so the authors retain all
+rights by default. Running a local copy is ordinary use; publishing one is not
+something to do without asking them. The maps and textures it loads come from a
+local game install, which is a further reason this stays a local tool.
 
-## What you need
+## Requirements
 
-- Counter-Strike: Source, with a working local server
+- Counter-Strike: Source with a working local server
 - SourceMod and Metamod on that server
 - Python 3 with numpy
-- The map you want to train on
+- The map to train on
 
-There is no machine learning library here. The maths is written out in plain
-numpy, so you can read it.
+There is no machine learning framework here. The maths is written out in numpy.

@@ -1,13 +1,4 @@
-"""
-Generate a training report from the logs.
-
-Written for the case where training ran unattended for hours and you want to know
-what happened without reading a CSV. Produces `reports/latest.md` plus a
-timestamped copy, and is safe to run while training is in flight.
-
-    python tools/report.py                 # write reports/latest.md
-    python tools/report.py --print         # also dump it to the console
-"""
+"""Write reports/latest.md from the training log and recent replays."""
 
 import argparse
 import csv
@@ -36,10 +27,6 @@ def current_map(root):
     """Which map is being trained. The daemon publishes this; default for old setups."""
     f = os.path.join(root, "data", "map.txt")
     try:
-        # utf-8-sig: PowerShell's Set-Content -Encoding utf8 writes a BOM, and
-        # Python reads it as part of the name. "﻿surf_demise" then matches
-        # no file, and the report says "no reference run found" for a map that
-        # has one.
         with open(f, encoding="utf-8-sig") as fh:
             name = fh.read().strip()
             if name:
@@ -48,14 +35,8 @@ def current_map(root):
         pass
     return "surf_demise"
 
-
 def human_reference(map_name):
-    """
-    The time to beat, taken from the states file the map's own replay produced.
-
-    It used to be the constant 39.10, which is this one map's number and would
-    have quietly mis-stated the target on every other map.
-    """
+    """The time to beat, taken from the states file the map's own replay produced."""
     path = os.path.join(DATA, "%s_states.txt" % map_name)
     try:
         with open(path) as fh:
@@ -68,13 +49,7 @@ def human_reference(map_name):
         pass
     return 0.0
 def track_units(map_name):
-    """
-    Track length, read from the map's own track file.
-
-    This was the constant 135547.0, which was already 305 units stale for
-    surf_demise itself and would be wrong by the whole difference on any other
-    map - silently rescaling every distance in the report.
-    """
+    """Track length, read from the map's own track file."""
     path = os.path.join(DATA, "%s_track.txt" % map_name)
     try:
         with open(path) as fh:
@@ -86,7 +61,6 @@ def track_units(map_name):
     except (OSError, ValueError, IndexError):
         pass
     return 0.0
-
 
 def spark(vals, width=56):
     if not vals:
@@ -102,19 +76,16 @@ def spark(vals, width=56):
     return "".join(BLOCKS[min(int((v - lo) / (hi - lo) * (len(BLOCKS) - 1)), len(BLOCKS) - 1)]
                    for v in vals)
 
-
 def load(path):
     if not os.path.exists(path):
         return []
     with io.open(path, encoding="utf-8") as fh:
         return list(csv.DictReader(fh))
 
-
 def fmt_dur(secs):
     secs = int(secs)
     h, m = secs // 3600, (secs % 3600) // 60
     return ("%dh %02dm" % (h, m)) if h else ("%dm %02ds" % (m, secs % 60))
-
 
 def replay_table():
     """Control-quality stats for the most recent bot replays, next to the human."""
@@ -135,25 +106,12 @@ def replay_table():
             else:
                 rows.append({"name": os.path.basename(p), "error": "no frames read"})
         except Exception as e:
-            # This used to be a bare pass. A replay that could not be parsed just
-            # vanished from the report, and if every one failed the section
-            # disappeared with no indication that anything had been attempted -
-            # which reads identically to "no replays yet".
             rows.append({"name": os.path.basename(p),
                          "error": "%s: %s" % (type(e).__name__, e)})
     return rows
 
-
 def eval_runs(limit_bytes=4000000):
-    """Every eval run the server has logged, as (finished, fraction, seconds).
-
-    The daemon evaluates every few minutes and each eval is eight runs from the
-    start of the map with a different recorded prestrafe. Over a night that is
-    hundreds of independent samples of the current policy, already on disk and
-    costing nothing to read. It is the only unbiased view of WHERE the runs that
-    fail actually end - the batch files cannot answer it, because the learner
-    deletes the ones it uses and what is left skews old.
-    """
+    """Every eval run the server has logged, as (finished, fraction, seconds)."""
     path = os.path.join(CSTRIKE, "console.log")
     out = []
     try:
@@ -165,9 +123,6 @@ def eval_runs(limit_bytes=4000000):
             blob = fh.read().decode("utf-8", "replace")
     except OSError:
         return out
-    # Each eval announces the policy generation it is testing. Without tracking
-    # that, a 120-run eval of an hour-old policy sits in the same pile as the
-    # current one and drags the rate down by a factor of ten.
     cur = 0
     for line in blob.splitlines():
         h = re.search(r"eval: \d+ \w+ runs from state 0, policy gen (\d+)", line)
@@ -179,7 +134,6 @@ def eval_runs(limit_bytes=4000000):
             out.append((cur, m.group(1).upper() == "FINISHED",
                         float(m.group(2)), float(m.group(3))))
     return out
-
 
 def build(log_path, out_dir):
     rows = load(log_path)
@@ -210,11 +164,6 @@ def build(log_path, out_dir):
     eps = [int(r["episodes"]) for r in rows]
     fell = [int(r["fell"]) for r in rows]
     fin = [int(r["finished"]) for r in rows]
-    # The wall column is seconds since the LEARNER started, and the learner is
-    # restarted whenever the daemon is. Reading the last row gave "wall time
-    # 1m 42s" for a run of 2900 generations, and a throughput of 1.2 million
-    # steps a second. Sum the per-generation deltas and treat a drop as a
-    # restart.
     wall, prevw = 0.0, None
     for r in rows:
         try:
@@ -225,10 +174,6 @@ def build(log_path, out_dir):
             wall += w - prevw
         prevw = w
 
-    # Recent window against the one before it. Capped at 150 generations: a
-    # quarter of the history is 700 generations here, which spans several
-    # configuration changes and reports the average of two unrelated regimes as
-    # a trend.
     w = min(max(len(gain) // 4, 5), 150)
     recent = sum(gain[-w:]) / min(w, len(gain))
     prior = sum(gain[-2 * w:-w]) / max(min(w, len(gain) - w), 1) if len(gain) > w else recent
@@ -239,11 +184,6 @@ def build(log_path, out_dir):
     else:
         trend = "**flat** (%.2f%% -> %.2f%%)" % (prior, recent)
 
-    # The headline number, which nothing in train_log.csv can express. Its
-    # `finished` column counts checkpoint-spawned episodes that only ever had
-    # ten seconds of track to cover, and `best_progress` pins at 1.0 the moment
-    # the bot can run the map at all and then never moves again. Both read
-    # healthy through a wall and flat through a breakthrough.
     A("## Complete runs")
     A("")
     A("Episodes that began at the start of the map and reached the end. Counted")
@@ -389,8 +329,6 @@ def build(log_path, out_dir):
 
     return "\n".join(L)
 
-
-
 MAP = current_map(ROOT)
 HUMAN_TIME = human_reference(MAP)
 TRACK_UNITS = track_units(MAP)
@@ -420,7 +358,6 @@ def main():
     else:
         print("wrote %s" % latest)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

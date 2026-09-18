@@ -1,22 +1,10 @@
 #!/bin/bash
-# Grow the learned wind-up as the policy earns it, and put the baseline back if
-# it does not.
-#
-# The policy has never seen the ground states at the start of a wind-up - 8800
-# generations of air strafing and nothing else - so handing it the whole thing at
-# once replaces a known-good opening with a random one. It gets the last few
-# ticks first, where the state is already close to the handover it knows, and
-# more only once the finish rate has come back.
 cd "$(dirname "$0")/.."
 
 STEP=${STEP:-8}                 # ticks added per promotion
 MAX=${MAX:-64}                  # never hand over more than this
 PROMOTE=${PROMOTE:-90}          # finish rate (%) that earns the next step
 COLLAPSE=${COLLAPSE:-55}        # finish rate (%) that triggers a rollback
-# ...and how much slower the runs may get before that counts as a rollback too.
-# Judging on the finish rate alone is how the first attempt at this went wrong:
-# it promoted five times while the median run went from 39.8 s to 44.5 s, because
-# 90% of runs kept finishing and that was the only thing being watched.
 SLOWER=${SLOWER:-0.40}          # seconds of median run time
 NEED=${NEED:-120}               # generations to judge either on
 BASE_CKPT=${BASE_CKPT:-data/ckpt_baseline_gen8858.npz}
@@ -24,15 +12,6 @@ DARGS_COMMON="-Map surf_demise -Power high -FrameSkip 2 -StateMix 0.3 -StateLo 0
 
 gen_now() { tail -1 data/train_log.csv | cut -d, -f1; }
 
-# Returns: <generations since the mark> <runs> <finish rate over the TRAILING
-# window> <best time since the mark>.
-#
-# The rate is measured over the last $TRAIL generations, not over everything
-# since the mark. Handing the policy more of the wind-up always costs finish rate
-# for a while and then wins it back - the PreLearn=8 step went 84.1, 89.9, 90.3,
-# 92.3 in blocks of forty - and averaging the whole window keeps the dip in the
-# number long after it stopped being true. Judged on the average it promotes
-# late, or on a bad step refuses to roll back until the early damage is diluted.
 since() {
   awk -F, -v g0="$1" -v trail="${TRAIL:-80}" '
     NR>1 && $18!="" && $1+0>g0 { c++; N[c]=$18; F[c]=$19; M[c]=$21+0; if($20+0>0 && (b==0||$20+0<b)) b=$20+0 }

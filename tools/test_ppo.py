@@ -1,19 +1,9 @@
-"""
-Numerical gradient checks for the hand-written backprop in ppo.py.
-
-Hand-derived gradients are exactly the kind of thing that is silently wrong: a
-sign error trains the policy to minimise reward and nothing reports an error, it
-just never learns. These tests compare the analytic gradients against finite
-differences of the same scalar loss.
-
-Run:  python tools/test_ppo.py
-"""
+"""Gradient and shape checks for ppo.py."""
 
 import numpy as np
 
 from ppo import (Policy, Value, log_softmax, POL_TOTAL, H1, H2, compute_gae)
 from rollout import OBS_DIM, N_ACTIONS
-
 
 def ppo_scalar_loss(policy, o, a, olp, ad, clip=0.2, ent_coef=0.01):
     logits, _ = policy.forward(o)
@@ -25,7 +15,6 @@ def ppo_scalar_loss(policy, o, a, olp, ad, clip=0.2, ent_coef=0.01):
     clipped = np.clip(ratio, 1 - clip, 1 + clip) * ad
     entropy = -(p * lsm).sum(axis=1)
     return float(-np.minimum(unclipped, clipped).mean() - ent_coef * entropy.mean())
-
 
 def analytic_policy_grads(policy, o, a, olp, ad, clip=0.2, ent_coef=0.01):
     n = len(a)
@@ -50,7 +39,6 @@ def analytic_policy_grads(policy, o, a, olp, ad, clip=0.2, ent_coef=0.01):
 
     return policy.backward(cache, dlogits)
 
-
 def numeric_grads(fn, params, eps=1e-6):
     out = []
     for p in params:
@@ -68,11 +56,9 @@ def numeric_grads(fn, params, eps=1e-6):
         out.append(g)
     return out
 
-
 def rel_err(a, b):
     denom = np.maximum(np.abs(a) + np.abs(b), 1e-12)
     return float(np.max(np.abs(a - b) / denom))
-
 
 def check_policy():
     rng = np.random.default_rng(7)
@@ -96,7 +82,6 @@ def check_policy():
         print("   policy %-3s max rel err %.3e" % (nm, e))
     assert worst < 2e-4, "policy gradient mismatch: %.3e" % worst
     return worst
-
 
 def check_value():
     rng = np.random.default_rng(11)
@@ -125,7 +110,6 @@ def check_value():
     assert worst < 2e-4, "value gradient mismatch: %.3e" % worst
     return worst
 
-
 def check_gae():
     # two episodes: first ends terminal, second is a cutoff
     rew = np.array([1.0, 1.0, 1.0, 2.0, 2.0])
@@ -140,7 +124,6 @@ def check_gae():
     assert abs(adv[4] - expected) < 1e-12, (adv[4], expected)
     print("   gae terminal vs cutoff handling OK")
     return 0.0
-
 
 def check_flat_layout():
     pol = Policy(np.random.default_rng(1))
@@ -162,7 +145,6 @@ def check_flat_layout():
         assert np.array_equal(x, y), "layout mismatch in " + nm
     print("   weight layout round-trips (%d floats)" % POL_TOTAL)
     return 0.0
-
 
 if __name__ == "__main__":
     print("checking policy gradients...")

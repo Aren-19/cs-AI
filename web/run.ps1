@@ -1,16 +1,3 @@
-<#
-    Start the local replay viewer: backend + frontend.
-
-        .\web\run.ps1              # start both, open the browser
-        .\web\run.ps1 -NoBrowser
-        .\web\run.ps1 -Stop        # stop both
-
-    Backend  : http://127.0.0.1:8787   (tools/webserve.py)
-    Frontend : http://127.0.0.1:3000   (offstyles-web, Vite)
-
-    The frontend's Vite config proxies /api and /maps to the backend, so the
-    viewer reads our replays and our local CS:S install instead of offstyles.net.
-#>
 param(
     [int]$ApiPort = 8787,
     [int]$WebPort = 3000,

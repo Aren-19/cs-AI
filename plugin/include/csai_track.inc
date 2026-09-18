@@ -1,89 +1,14 @@
-/**
- * csai_track - centerline, progress, observation vector.
- *
- * The centerline comes from a human replay (tools/replay.py --track). Progress
- * along it is the dense reward signal: defined on every tick, unlike a sparse
- * "did you finish" bonus, which is unlearnable over a 2600-tick episode.
- *
- * The observation is deliberately built from (pos, vel) and the centerline ONLY -
- * no traces. Two reasons:
- *   1. Tracking the reference line IS surfing, because the line runs along the
- *      ramps. The agent does not need to see geometry it is already being told
- *      to follow.
- *   2. Everything here is recomputable in Python from logged (pos, vel), so
- *      trajectories log 8 floats per step instead of 30+, and the observation
- *      definition can change without re-collecting data.
- */
-
 #if defined _csai_track_included
 	#endinput
 #endif
 #define _csai_track_included
 
-/**
- * Room for a long map, and a loud failure rather than a quiet one if exceeded.
- *
- * Measured: surf_demise 1474 points, surf_dune 890. At demise's ~92 units per
- * point, 2048 points was only about 188k units - roughly 40% of headroom. Going
- * over used to `break` silently, which set the track length to the arc length of
- * the last point that fit, and the finish test (s >= length - 96) then declared
- * EP_FINISHED partway through the map and paid the completion bonus.
- */
 #define MAX_TRACK       16384
 
-/**
- * Lookahead points are spaced LOGARITHMICALLY, not uniformly.
- *
- * Uniform spacing (5 points x 6 track points = 1920 units) gave the policy only
- * 0.53 s of preview at this map's median 3614 u/s, and 0.40 s at its 4789 u/s
- * peak - while episodes last ~11.7 s. That is the information ceiling that made
- * training plateau at ~6.7% of the track regardless of how much data it saw: you
- * cannot plan a surf line you cannot see.
- *
- * Track points are 64 units apart, so these offsets span 256 .. 16384 units,
- * i.e. roughly 0.07 s .. 4.5 s ahead at median speed. Near points keep the local
- * precision, far points supply the route context.
- *
- * Each point is normalised by its own nominal arc distance, so all seven stay
- * O(1) instead of the far ones dominating the input scale.
- */
 #define LOOKAHEAD       7
 #define PROBE_RAYS      8        // 5 down-facing, then left, right, forward
-/**
- * Rays 0-4 look down, for the ramp underneath - which is the whole story in
- * ordinary surfing. Rays 5-7 look sideways and ahead, and exist because of the
- * drop at 72% of surf_demise: the surface there is a near-vertical wall beside
- * the bot rather than a ramp below it.
- *
- * Measured going into that drop: at 70.3% four rays were touching geometry
- * (0.05-0.12 of range), and half a second later four of the five read 1.00 -
- * nothing within 512 units - leaving one oblique ray at ~330 units as the only
- * description of the wall it had to ride.
- *
- * The new rays reach 1024 rather than 512, because 512 units is under two
- * decisions of warning at 4000 u/s. Rays 0-4 keep their old range and directions
- * exactly, and the surface normal is still taken from them alone, so every
- * observation value that existed before is unchanged and a trained policy can be
- * carried straight over.
- */
 #define PROBE_DOWN_RAYS 5
 #define PROBE_DIM       (PROBE_RAYS + 3)
-// +2 for sin/cos of the currently held wish angle. With delta actions the
-// absolute angle is internal state; if the policy cannot see it, it is acting
-// blind on the one variable it directly controls.
-/**
- * Previously the observation ended with cos/sin of the PREVIOUS wish angle.
- * That is the previous action, and behaviour cloning latched onto it: because a
- * human changes strafe key only ~1/s out of 33 decisions/s, "repeat the last
- * action" alone predicts their side 96.7% of the time. The clone scored 0.972
- * side accuracy on the human's trajectory and 0.1% of the map when driving,
- * switching sides 0.00 times per second - it had welded itself to one key,
- * because at eval that feature is its own output fed back.
- *
- * With the feature ablated, side accuracy is 0.917 (majority baseline 0.613),
- * so the geometry alone carries the technique. WISH_DIM 0 removes it; set it
- * back to 2 only with a reason.
- */
 #define WISH_DIM        0
 #define OBS_DIM         (7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM)
 
@@ -169,11 +94,6 @@ static stock float DistSqToPoint(const float pos[3], int i)
 	return Sq(pos[0] - g_fTrackX[i]) + Sq(pos[1] - g_fTrackY[i]) + Sq(pos[2] - g_fTrackZ[i]);
 }
 
-/**
- * Nearest centerline index. A full scan of ~1500 points every tick would cost
- * more than the physics at 5000 ticks/s, so search a window around the previous
- * answer. hint < 0 forces a full scan (after a reset or teleport).
- */
 stock int Track_Nearest(const float pos[3], int hint)
 {
 	if (g_iTrackCount == 0)
@@ -207,11 +127,6 @@ stock int Track_Nearest(const float pos[3], int hint)
 	return best;
 }
 
-/**
- * Project onto the two segments adjacent to the nearest point, so progress is
- * smooth rather than quantised to the 64-unit point spacing. Returns arc length;
- * fills `closest` with the projected point and `outDist` with the distance to it.
- */
 stock float Track_Project(const float pos[3], int idx, float closest[3], float &outDist)
 {
 	if (idx < 0 || g_iTrackCount == 0)
@@ -275,20 +190,6 @@ stock float Track_TangentYaw(int i)
 	return RadToDeg(ArcTangent2(g_fTrackY[b] - g_fTrackY[a], g_fTrackX[b] - g_fTrackX[a]));
 }
 
-/**
- * Observation vector. Everything is expressed in a frame attached to the player's
- * horizontal velocity, so the policy sees the same numbers for the same relative
- * situation anywhere on the map.
- *
- *   0  horizontal speed / 1000
- *   1  vertical speed / 1000
- *   2  cos(velocity heading - track tangent)
- *   3  sin(same)
- *   4  signed lateral offset from the line / 256
- *   5  vertical offset from the line / 256
- *   6  progress fraction along the track
- *   7.. next LOOKAHEAD centerline points, player-local, / 512
- */
 stock void Track_BuildObs(const float pos[3], const float vel[3], int idx, float obs[OBS_DIM])
 {
 	for (int i = 0; i < OBS_DIM; i++)
@@ -343,24 +244,6 @@ stock void Track_BuildObs(const float pos[3], const float vel[3], int idx, float
 	}
 }
 
-
-/**
- * Surface probe - what the agent is actually riding.
- *
- * The centerline says where to GO. It says nothing about where the ramp IS, and
- * once the agent drifts off the line it has no way to find the surface again.
- * Measured on a failed run: at death the bot was 346 units to the side but 502
- * units BELOW the line and falling - it had lost the ramp and could not perceive
- * it. That is why training plateaued at ~7% of the track regardless of the
- * lookahead or discount horizon.
- *
- * Five rays cast down and diagonally in the velocity frame. Output is the
- * per-ray hit distance plus the normal of the nearest hit, expressed in the
- * velocity frame so it is orientation-invariant like the rest of the vector.
- *
- * These CANNOT be recomputed in Python - they need the engine's collision - so
- * they are logged per step in the trajectory instead.
- */
 stock void Track_BuildProbe(int client, const float pos[3], const float vel[3], float out[PROBE_DIM])
 {
 	for (int i = 0; i < PROBE_DIM; i++)
@@ -388,9 +271,6 @@ stock void Track_BuildProbe(int client, const float pos[3], const float vel[3], 
 
 	for (int i = 0; i < PROBE_RAYS; i++)
 	{
-		// The level rays reach further: 512 units is under two decisions of
-		// warning at surf speed, and these are the ones meant to see a drop
-		// coming rather than the ramp already underfoot.
 		float maxDist = (i < PROBE_DOWN_RAYS) ? 512.0 : 1024.0;
 
 		// rotate the velocity-frame direction into world space

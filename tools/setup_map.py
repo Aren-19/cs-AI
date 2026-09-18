@@ -1,25 +1,4 @@
-"""
-Prepare a map for training from a recorded run.
-
-The plugin needs four files per map, all derived from a human's replay:
-
-    <map>_track.txt      the reference line, with cumulative distance along it
-    <map>_states.txt     restartable checkpoints spread through the run
-    <map>_prestrafe.txt  the pre-timer inputs, replayed before the bot takes over
-    <map>_demo.txt       the whole clean run, for cloning technique from
-
-Producing them meant four separate invocations of replay.py with four hand-typed
-destination paths, and nothing checked the result. That was the missing first
-step for "drop it on any map".
-
-    python tools/setup_map.py surf_dune
-    python tools/setup_map.py surf_dune --replay path\\to\\run.replay
-    python tools/setup_map.py surf_dune --check      # validate what already exists
-
-It refuses rather than half-finishing: a map set up wrong does not fail, it
-trains against a wrong reference line and reports plausible numbers the whole
-way.
-"""
+"""Prepare a map for training from a recorded run, or check an existing setup."""
 
 import argparse
 import glob
@@ -40,7 +19,6 @@ ARTEFACTS = ("track", "states", "prestrafe", "demo")
 # csai_episode.inc: further than this from the centerline ends the episode.
 MAX_DEVIATION = 600.0
 
-
 def find_replay(map_name, given):
     if given:
         return given if os.path.isfile(given) else None
@@ -50,10 +28,8 @@ def find_replay(map_name, given):
             return p
     return None
 
-
 def paths(map_name):
     return {a: os.path.join(DATA, "%s_%s.txt" % (map_name, a)) for a in ARTEFACTS}
-
 
 def header_value(path, key, cast=float):
     try:
@@ -67,7 +43,6 @@ def header_value(path, key, cast=float):
         pass
     return None
 
-
 def data_lines(path):
     try:
         with open(path, encoding="utf-8-sig") as fh:
@@ -75,19 +50,8 @@ def data_lines(path):
     except OSError:
         return 0
 
-
 def run_vs_track(map_name, demo_path):
-    """How far does a recorded run stray from the track the reward uses?
-
-    An episode is killed the moment it is more than g_fMaxDeviation (600) units
-    from the centerline, and the centerline is built from exactly one recorded
-    run. Nothing checked that the *other* recorded runs - the ones cloning
-    learns from - stay inside that corridor. Two of surf_demise's eight spend
-    hundreds of ticks outside it, so cloning from them teaches a line the reward
-    terminates, and the bot is punished for reproducing what it was shown.
-
-    Returns (max_units_off, ticks_outside, total_ticks, teleported), or None.
-    """
+    """How far does a recorded run stray from the track the reward uses?"""
     try:
         sys.path.insert(0, HERE)
         import numpy as np
@@ -116,10 +80,6 @@ def run_vs_track(map_name, demo_path):
         return None
     pts = np.array(pts)
 
-    # A map teleport moves the player thousands of units in one tick. The
-    # windowed nearest-point search only looks 64 points ahead, so it cannot
-    # follow that and every reading after it is meaningless. Say so rather than
-    # reporting a mean of 9000 units as if it were a line.
     step = np.linalg.norm(np.diff(pts, axis=0), axis=1)
     teleported = bool((step > 2000).any())
 
@@ -132,7 +92,6 @@ def run_vs_track(map_name, demo_path):
         d.append(dist)
     d = np.array(d)
     return float(d.max()), int((d > MAX_DEVIATION).sum()), len(d), teleported
-
 
 def check(map_name):
     """Returns (ok, list of (label, detail, is_problem))."""
@@ -189,10 +148,6 @@ def check(map_name):
             rows.append((label, "has a map teleport - cannot be measured against "
                                 "the track past that point", False))
         elif out > 0:
-            # A note, not a failure. The map trains perfectly well with runs like
-            # this on disk - they only matter if one is used for cloning, and then
-            # they matter a lot, because the reward kills the very line being
-            # taught. Refusing to train over it would be worse than saying so.
             rows.append((label, "%d of %d ticks more than %.0f units off the track "
                                 "(worst %.0f) - do not clone from this one"
                          % (out, total, MAX_DEVIATION, worst), False))
@@ -205,14 +160,12 @@ def check(map_name):
     ok = ok and os.path.isfile(bsp)
     return ok, rows
 
-
 def report(map_name):
     ok, rows = check(map_name)
     width = max(len(r[0]) for r in rows) if rows else 8
     for label, detail, bad in rows:
         print("  %-*s %s%s" % (width, label, detail, "   <-- problem" if bad else ""))
     return ok
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -269,7 +222,6 @@ def main():
     print("there is nothing to carry over. More recorded runs of your own help it")
     print("most - see HOWTO.md.")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

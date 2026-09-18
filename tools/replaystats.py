@@ -1,21 +1,4 @@
-"""
-Per-replay statistics: jumps, strafes, sync.
-
-The record view renders these and calls .toFixed() on them, so they have to be
-present and numeric. They are also genuinely worth having: sync is the standard
-bhop/surf quality measure, and seeing the bot's sync next to a human's says more
-about whether it learned to strafe properly than the finish time does.
-
-Definitions match what surf/bhop timers report:
-
-  jumps    rising edges of IN_JUMP
-  strafes  rising edges of either strafe key (a "strafe" is one direction change)
-  sync     of the frames where the player is strafing in the air, the fraction
-           where the view is turning the SAME way as the held strafe key. That is
-           what actually gains speed; turning against your key loses it.
-
-Results are cached by (path, mtime) because the listing endpoint is hit often.
-"""
+"""Summary numbers for a replay file."""
 
 import math
 import os
@@ -27,7 +10,6 @@ IN_MOVERIGHT = 1024
 FL_ONGROUND = 1
 
 _cache = {}
-
 
 def _frames(path):
     with open(path, "rb") as fh:
@@ -58,9 +40,6 @@ def _frames(path):
         p += 8                       # zone offsets
 
     remaining = len(blob) - p
-    # The stored count excludes pre/post frames, but the file contains them.
-    # Dividing by the wrong total yields a wrong stride, and misaligned float
-    # reads produce inf - which used to hang the yaw normalisation below.
     total = count + pre + post
     if total <= 0:
         return []
@@ -78,7 +57,6 @@ def _frames(path):
         flags = struct.unpack_from("<i", blob, o + 24)[0] if size >= 28 else 0
         out.append((yaw, buttons, flags))
     return out
-
 
 def stats(path):
     key = (path, os.path.getmtime(path))
@@ -127,7 +105,6 @@ def stats(path):
     }
     _cache[key] = out
     return out
-
 
 if __name__ == "__main__":
     import sys

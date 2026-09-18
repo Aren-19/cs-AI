@@ -1,13 +1,4 @@
-"""
-Write a checkpoint's policy out as the weights.txt the plugin reads.
-
-Needed to answer "which of these saved policies is actually fastest", which is
-not a question the training log can answer: it records sampled runs from a
-policy that was moving at the time, and the only clean comparison is a
-deterministic eval of each one.
-
-    python tools/publish.py data/ckpt_prelearn_8.npz
-"""
+"""Write a checkpoint's policy out as the weights file the plugin reads."""
 
 import argparse
 import os
@@ -22,7 +13,6 @@ from ppo import Policy, write_weights
 
 CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
 WEIGHTS = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\weights.txt")
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -48,7 +38,6 @@ def main():
     print("published %s (generation %d, %d tensors) -> %s"
           % (os.path.basename(args.ckpt), gen, n, args.weights))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

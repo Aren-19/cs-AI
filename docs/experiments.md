@@ -437,8 +437,8 @@ payoff is not 40 s of successful surfing away.
 ## Eight human runs, and why cloning them failed
 
 Added an in-game recorder (`csai_record.inc`) because the timer cannot supply
-extra runs - shavit keeps one replay per map and only replaces it when you beat
-your time, so slower runs are discarded. Seven new runs were recorded, times
+extra runs - shavit keeps one replay per map and replaces it only on a
+faster time, so slower runs are discarded. Seven new runs were recorded, times
 39.0-40.3 s, plus the original.
 
 Offline, the extra data looks like exactly the fix the bot needed:
@@ -611,7 +611,7 @@ single oblique reading at ~330 units. By then it is already too late - closing
 300 units sideways needs about 0.55 s and it has 0.3 s.
 
 All five rays pointed down, which is right for a ramp underfoot and wrong for a
-wall beside you. Three level rays were added (left, right, forward) at 1024 units
+wall alongside. Three level rays were added (left, right, forward) at 1024 units
 rather than 512, since 512 is under two decisions of warning at surf speed.
 
 Rays 0-4 keep their exact directions and range, and the surface normal is still
@@ -639,7 +639,7 @@ Two bugs found while establishing that, both mine:
 
 - The setting was not reaching the running actors at all, and the plateau was
   being watched as if it were under treatment. A `mid N` counter in the batch
-  line settled it in one look. Instrument the thing you are changing.
+  line settled it in one look. Instrument the thing being changed.
 - The learner had a 75-batch backlog, oldest 45 minutes stale, and consumes
   oldest-first - so it was training on pre-change data while the actors produced
   post-change data, and the two disagreed by 25 points of progress. With sync on,
@@ -666,7 +666,7 @@ at this spot than anywhere else:
 | 68-76% (the drop) | 86.5% | **12.2%** | 1.3% |
 
 With no strafe key there is no wish direction and no air acceleration at all -
-you coast, and stop pushing yourself off the surface you are riding. Forced to
+coasting stops pushing the player off the surface being ridden. Forced to
 accelerate every tick, the bot cannot hold a delicate contact.
 
 Added action 16, POL_COAST: presses nothing, keeps the held side so resuming does

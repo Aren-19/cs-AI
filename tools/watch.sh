@@ -9,22 +9,11 @@ GEN=$(tail -1 data/train_log.csv 2>/dev/null | cut -d, -f1)
 AGE=$(( $(date +%s) - $(stat -c %Y data/train_log.csv 2>/dev/null || echo 0) ))
 STALL=$(grep -ac "STALLED" logs/daemon.log 2>/dev/null || echo 0)
 
-# Batch files whose .done marker never arrived. Everything else here can look
-# perfectly healthy while this is the problem: the actors burn a core each
-# writing .bin files, the learner polls for .done markers that do not exist,
-# and every liveness check passes. That is exactly how a missing pair of braces
-# in Ep_OpenBatch killed training for half an hour with eleven actors at 100%.
-# Counted by age, not by number: every actor has one batch in flight at any
-# moment, so a dozen markerless files is normal. A batch takes about fifty
-# seconds, so one still unmarked after five minutes never will be.
 ORPH=0
 NOW=$(date +%s)
 if [ -d "$OUT" ]; then
   for b in "$OUT"/a*_batch_*.bin; do
     [ -e "$b" ] || continue
-    # Actor 99 is an eval run. It deliberately sets its batch target beyond the
-    # number of runs so a batch never completes, so its .bin is always
-    # markerless and is not evidence of anything.
     case "$b" in *a99_batch_*) continue;; esac
     [ -e "${b%.bin}.done" ] && continue
     [ $(( NOW - $(stat -c %Y "$b") )) -gt 300 ] && ORPH=$((ORPH + 1))

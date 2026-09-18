@@ -1,29 +1,3 @@
-/**
- * csai_record - record YOUR runs, so the bot has more than one to learn from.
- *
- * The bot copies a human run to pick up technique, and it only ever had one:
- * 1213 decisions, all on a single line. It has never seen a state slightly off
- * that line, which is why it can surf a ramp cleanly and then have no idea how
- * to save itself when it drifts.
- *
- * The timer's own replay file cannot supply more. shavit keeps exactly one
- * replay per map per style and overwrites it only when you beat your time, so a
- * slower or messier run - the kind that is most useful here, because it contains
- * a recovery - is never written at all.
- *
- * So this records independently of the timer. Every completed run is saved, fast
- * or slow, numbered alongside the others.
- *
- * It keeps a rolling buffer while you are alive, marks where the timer started,
- * and writes the file when you finish. The rolling part matters: the run proper
- * begins at the timer, but the prestrafe before it has to be in the file too,
- * and that has already happened by the time the timer fires.
- *
- * Shavit_OnStart and Shavit_OnFinish are global forwards, so implementing them
- * costs no load-time dependency - without the timer they simply never fire, and
- * the manual commands still work.
- */
-
 #if defined _csai_record_included
 	#endinput
 #endif
@@ -61,13 +35,6 @@ stock int Rec_Human_NextSlot()
 	return -1;
 }
 
-/**
- * Keep only the last REC_PRE_KEEP ticks before the timer started.
- *
- * Whatever came earlier is idling in the start zone or a failed attempt, and the
- * whole file gets replayed through physics later - a junk prefix is replayed
- * too. The real prestrafe is about 67 ticks.
- */
 stock void Rec_Human_TrimPre()
 {
 	if (g_iRecHumanCount <= REC_PRE_KEEP)
@@ -91,9 +58,6 @@ stock void Rec_Human_Tick(int client, int buttons, const float angles[3])
 	if (!g_bRecHumanOn || client != g_iRecHumanClient)
 		return;
 
-	// Before the timer starts this is just a rolling window. Compact it in
-	// blocks rather than shifting every tick - idling in the start zone would
-	// otherwise fill the whole buffer.
 	if (g_iRecHumanPre < 0 && g_iRecHumanCount >= REC_PRE_TRIM)
 	{
 		int keep = REC_PRE_KEEP;
@@ -116,9 +80,6 @@ stock void Rec_Human_Tick(int client, int buttons, const float angles[3])
 	float pos[3];
 	GetClientAbsOrigin(client, pos);
 
-	// A respawn or a timer restart moves the player thousands of units in one
-	// tick. Everything buffered before that belongs to the previous attempt, and
-	// replaying it would start the run in the wrong place entirely.
 	if (g_iRecHumanCount > 0)
 	{
 		int last = g_iRecHumanCount - 1;
@@ -205,10 +166,6 @@ stock void Rec_Human_Track(int client)
 	if (client == g_iBot || IsFakeClient(client))
 		return;
 
-	// Claim the first real player and keep them. This used to adopt whichever
-	// client ticked last and reset the buffer on every change, so with two
-	// people on the server the count never got past 1 and !csai_save reported
-	// "nothing recorded yet" forever, with no hint why.
 	if (g_iRecHumanClient == client)
 		return;
 	if (g_iRecHumanClient > 0 && IsClientInGame(g_iRecHumanClient)

@@ -1,40 +1,4 @@
-"""
-Parser for shavit bhoptimer replay files, and the derived artefacts training needs.
-
-A replay is the single most valuable input to this project. It gives us, from one
-recorded human run:
-
-  * a centerline  -> dense progress reward, instead of a sparse "did you finish"
-  * checkpoints   -> restart-from-mid-map curriculum, which is what makes a
-                     multi-minute map learnable at all
-  * a start state -> exact origin/angles to begin every episode from
-  * inputs        -> a behaviour-cloning warm start
-  * a time        -> the number to beat
-
-Format (authoritative source: addons/sourcemod/scripting/include/shavit/replay-file.inc)
-
-Header:
-    "<version>:<format>\\n"              ASCII line
-    v>=3: map (NUL-terminated), style (u8), track (u8), preframes (i32)
-          frameCount (i32), time (f32)
-    v>=4: steamid (i32)
-    v>=5: postframes (i32), tickrate (f32)
-    v>=8: zoneOffset[0] (f32), zoneOffset[1] (f32)
-
-Frame (v>=6, 40 bytes):
-    0   f32[3]  pos
-    12  f32[2]  ang   (pitch, yaw)
-    20  i32     buttons
-    24  i32     flags
-    28  i32     movetype
-    32  i32     mousexy   mousex | (mousey << 16), signed shorts
-    36  i32     vel       forwardmove | (sidemove << 16), signed shorts
-
-Pure stdlib, no numpy, so it runs against the system Python without setup.
-
-Usage:
-    python tools/replay.py <file.replay> [--out DIR] [--spacing 64] [--checkpoints 24]
-"""
+"""Turn a timer replay into the track, start states, prestrafe and demo files."""
 
 import argparse
 import json
@@ -51,13 +15,11 @@ FRAME_SIZE_V6 = 40
 FRAME_SIZE_V2 = 28          # pos, ang, buttons, flags, movetype
 FRAME_SIZE_V1 = 24          # pos, ang, buttons
 
-
 def unpack_signed_shorts(x):
     """shavit packs two signed shorts into one int32."""
     lo = ((x & 0xFFFF) ^ 0x8000) - 0x8000
     hi = (((x >> 16) & 0xFFFF) ^ 0x8000) - 0x8000
     return lo, hi
-
 
 class Frame(object):
     __slots__ = ("pos", "ang", "buttons", "flags", "movetype",
@@ -74,7 +36,6 @@ class Frame(object):
         self.mousey = mousey
         self.forwardmove = forwardmove
         self.sidemove = sidemove
-
 
 class Replay(object):
     def __init__(self):
@@ -96,7 +57,6 @@ class Replay(object):
     def run_frames(self):
         """Just the timed portion - pre/post frames are idle padding."""
         return self.frames[self.preframes:self.preframes + self.frame_count]
-
 
 def parse_replay(path):
     with open(path, "rb") as fh:
@@ -173,32 +133,17 @@ def parse_replay(path):
     r.frames = frames
     return r
 
-
 # ------------------------------------------------------------------ derived ----
 
 def _dist(a, b):
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
 
-
-# A teleport is detected as an implausible *speed*, not a fixed per-tick distance.
-# A fixed distance is tickrate-dependent and silently wrong: at 67 tick a frame
-# covers 1.5x the ground it does at 100 tick for the same speed, and on a fast
-# descent map real steps reach ~74 units - only 1.36x under a 100-unit threshold.
-# Misclassifying real movement as a teleport makes prune_failed_attempts delete
-# genuine trajectory with no warning.
-#
-# Source clamps velocity to sv_maxvelocity per axis (default 3500, ~6062 u/s
-# magnitude), and maps rarely raise it far. 12000 u/s leaves ~2x headroom over
-# anything physically reachable, while the smallest real teleport observed
-# (839 units in one 100-tick frame = 83,900 u/s) sits an order of magnitude above.
 TELEPORT_SPEED = 12000.0       # u/s
-
 
 def teleport_threshold(tickrate):
     """Per-tick distance that counts as a teleport, for this replay's tickrate."""
     tr = tickrate if tickrate and tickrate > 0 else 100.0
     return TELEPORT_SPEED / tr
-
 
 def path_length(frames, tickrate=100.0):
     thr = teleport_threshold(tickrate)
@@ -209,13 +154,8 @@ def path_length(frames, tickrate=100.0):
             total += d
     return total
 
-
 def segments(frames, tickrate=100.0, threshold=None):
-    """
-    Split the run at teleports. Staged surf maps teleport the player between
-    stages, and reset them to the stage start when they fall - so a raw replay is
-    several trajectories concatenated, not one.
-    """
+    """Split the run at teleports. Staged surf maps teleport the player between"""
     if not frames:
         return []
     if threshold is None:
@@ -229,16 +169,8 @@ def segments(frames, tickrate=100.0, threshold=None):
     out.append((start, len(frames)))
     return out
 
-
 def prune_failed_attempts(frames, segs, tol=64.0):
-    """
-    When several segments begin at the same teleport destination, the player was
-    reset there after falling: the earlier ones are failed attempts. Keep only the
-    last attempt at each start point, in order.
-
-    Without this the centerline contains the dead ends, and progress reward pays
-    the agent for re-walking ground it later lost.
-    """
+    """When several segments begin at the same teleport destination, the player was"""
     kept = []
     for si, (a, b) in enumerate(segs):
         start_pos = frames[a].pos
@@ -251,7 +183,6 @@ def prune_failed_attempts(frames, segs, tol=64.0):
             kept.append((a, b))
     return kept
 
-
 def clean_frames(frames, tickrate=100.0):
     """The frames that belong to the successful line through the map."""
     segs = prune_failed_attempts(frames, segments(frames, tickrate))
@@ -260,21 +191,8 @@ def clean_frames(frames, tickrate=100.0):
         out.extend(frames[a:b])
     return out, segs
 
-
 def resample(frames, src_rate, dst_rate):
-    """
-    Re-time a recording onto another tickrate.
-
-    The plugin replays one recorded tick per server tick. A 100-tick recording
-    on a 66-tick server therefore holds every input for 1.5x as long and
-    reconstructs velocities 1.5x wrong - the bot flies a completely different
-    line, and demo capture cheerfully pairs those observations with the human's
-    actions. Nothing reported it, because nothing compared the two rates.
-    (Live case: surf_dune's replay is 100 tick, this server is 66.67.)
-
-    Nearest-neighbour: inputs are piecewise constant, so interpolating buttons
-    would invent states the player never held.
-    """
+    """Re-time a recording onto another tickrate."""
     if not frames or src_rate <= 0 or dst_rate <= 0:
         return list(frames)
     if abs(src_rate - dst_rate) < 0.01:
@@ -286,27 +204,8 @@ def resample(frames, src_rate, dst_rate):
         out.append(frames[min(i, len(frames) - 1)])
     return out
 
-
 def centerline(frames, spacing=64.0, jump=200.0):
-    """
-    Resample the run by arc length, and say where it teleports.
-
-    Returns (points, break_after) where break_after[i] is True when the step from
-    point i to i+1 crosses a teleport rather than real travel.
-
-    A staged map restarts the player at the next stage, so the cleaned line is
-    only continuous within a segment. Resampling straight through those jumps
-    made 44% of surf_dune's 110,277-unit "track" a straight line through nothing,
-    and since progress along this polyline IS the reward, crossing one teleport
-    tick paid out about 23,000 units at once - which would dominate everything
-    the policy ever learned. surf_demise is a single segment, which is why this
-    went unnoticed.
-
-    The overshoot is also carried now rather than discarded. Resetting acc to 0
-    made the real spacing speed-dependent: a requested 64 measured a median 90 on
-    surf_demise and 68 on surf_dune, so fast sections got sparser points than
-    slow ones.
-    """
+    """Resample the run by arc length, and say where it teleports."""
     if not frames:
         return [], []
     pts = [frames[0].pos]
@@ -335,16 +234,8 @@ def centerline(frames, spacing=64.0, jump=200.0):
         brk.append(False)
     return pts, brk
 
-
 def checkpoints(frames, count=24, tickrate=100.0):
-    """
-    Evenly spaced full states for the restart curriculum. Surf state is just
-    origin + angles + velocity, so each of these is a complete, restorable
-    savestate - that is what makes 'start the agent 80% through the map' free.
-
-    Velocity is differentiated from consecutive positions; the replay does not
-    store it directly.
-    """
+    """Evenly spaced full states for the restart curriculum. Surf state is just"""
     if len(frames) < 2:
         return []
     dt = 1.0 / tickrate if tickrate > 0 else 0.01
@@ -373,7 +264,6 @@ def checkpoints(frames, count=24, tickrate=100.0):
         })
     return out
 
-
 def speed_profile(frames, tickrate=100.0):
     dt = 1.0 / tickrate if tickrate > 0 else 0.01
     speeds = []
@@ -384,7 +274,6 @@ def speed_profile(frames, tickrate=100.0):
         speeds.append(math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) / dt)
     return speeds
 
-
 def button_names(b):
     names = []
     for bit, nm in ((IN_JUMP, "JUMP"), (IN_DUCK, "DUCK"), (IN_FORWARD, "FWD"),
@@ -392,7 +281,6 @@ def button_names(b):
         if b & bit:
             names.append(nm)
     return "+".join(names) if names else "-"
-
 
 # ---------------------------------------------------------------------- cli ----
 
@@ -499,8 +387,6 @@ def main():
         print("wrote          : %s_{centerline.csv,checkpoints.json,frames.csv} -> %s"
               % (base, args.out))
 
-
-
     if args.states:
         # Flat, space-separated, one state per line. SourcePawn has no JSON
         # parser, and this is trivially read with File.ReadLine + ExplodeString.
@@ -541,9 +427,6 @@ def main():
         print("track file     : %s (%d points, %.0f units)" % (args.track, len(cl), cum[-1]))
 
     if args.prestrafe:
-        # The preframes ARE the prestrafe: the ticks the player spends building
-        # speed before the timer starts. Exporting the raw inputs lets the plugin
-        # replay them through real physics rather than teleporting past them.
         pre = resample(r.frames[:r.preframes], tr, args.tickrate)
         d = os.path.dirname(args.prestrafe)
         if d:
@@ -566,19 +449,9 @@ def main():
             print("prestrafe      : %s (%d ticks)" % (args.prestrafe, len(pre)))
 
     if args.demo:
-        # The whole recorded run, preframes included. The plugin replays these
-        # inputs through real physics so the observations it captures lie on the
-        # human trajectory - which is the only place the cloned actions are valid.
         d = os.path.dirname(args.demo)
         if d:
             os.makedirs(d, exist_ok=True)
-        # Preframes plus the CLEAN line, not every recorded frame. A recording
-        # often contains failed attempts that end in a respawn, and this file is
-        # replayed through real physics - feeding it a segment that begins
-        # thousands of units away puts the bot somewhere else entirely and every
-        # observation captured afterwards is paired with the wrong state.
-        # surf_demise happened to be recorded almost clean, which hid this;
-        # surf_dune drops 3 segments of 7483 frames.
         pre_n = len(resample(r.frames[:r.preframes], tr, args.tickrate))
         allf = (resample(r.frames[:r.preframes], tr, args.tickrate)
                 + resample(run, tr, args.tickrate))

@@ -1,33 +1,10 @@
-"""
-Valve Pak (VPK v1/v2) reader.
-
-Needed because the replay viewer asks for CS:S assets by Source filesystem path
-(`materials/foo.vmt`, `models/bar.mdl`) and almost all of them live inside
-`cstrike_pak_dir.vpk` + its numbered archives rather than as loose files.
-
-Directory tree layout, all NUL-terminated strings:
-
-    extension \\0
-        path \\0
-            filename \\0
-                crc u32, preload_bytes u16, archive_index u16,
-                entry_offset u32, entry_length u32, terminator u16 (0xFFFF)
-                [preload_bytes of inline data]
-            \\0   (end of filenames)
-        \\0       (end of paths)
-    \\0           (end of extensions)
-
-`archive_index == 0x7FFF` means the data sits in the _dir file itself, after the
-tree. Otherwise it is in `<base>_NNN.vpk`. A file can also be split: `preload`
-bytes inline followed by `entry_length` bytes in the archive.
-"""
+"""Read Valve VPK archives."""
 
 import os
 import struct
 
 VPK_SIGNATURE = 0x55AA1234
 ARCHIVE_IN_DIR = 0x7FFF
-
 
 class VPKEntry(object):
     __slots__ = ("crc", "preload", "archive_index", "offset", "length")
@@ -42,7 +19,6 @@ class VPKEntry(object):
     @property
     def size(self):
         return len(self.preload) + self.length
-
 
 class VPK(object):
     def __init__(self, dir_path):
@@ -137,13 +113,8 @@ class VPK(object):
                 pass
         self._archives.clear()
 
-
 class SourceFS(object):
-    """
-    Resolves a Source path against loose files first, then every mounted VPK -
-    the same precedence the engine uses, so a map's custom content overrides the
-    stock assets.
-    """
+    """Resolves a Source path against loose files first, then every mounted VPK -"""
 
     def __init__(self, game_dir, extra_dirs=()):
         self.roots = [game_dir]
@@ -187,7 +158,6 @@ class SourceFS(object):
     def stats(self):
         return {"roots": len(self.roots), "vpks": len(self.vpks),
                 "entries": sum(len(v.entries) for v in self.vpks)}
-
 
 if __name__ == "__main__":
     import sys

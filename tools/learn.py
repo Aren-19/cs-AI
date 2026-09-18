@@ -1,21 +1,4 @@
-"""
-The learner. Watches for trajectory batches from the plugin, runs PPO, and
-publishes a new policy generation.
-
-    plugin  ->  data/csai/out/batch_NNNN.bin + .done
-    learner ->  data/csai/weights.txt   (generation N+1)
-
-Run the actor in sync mode so it waits for each new policy:
-
-    .\\tools\\train.ps1 -Batches 500 -Sync 1 -Timescale 80
-    python tools/learn.py --batches 500
-
-Usage notes:
-  * GAE is computed per episode. Running it across the concatenation would
-    bootstrap one episode's final value from the next episode's first state.
-  * Timeout/stuck are cutoffs, not terminals, so they bootstrap; only falling and
-    finishing are absorbing. See Episode.terminal in rollout.py.
-"""
+"""PPO learner. Consumes trajectory batches, publishes weights each generation."""
 
 import argparse
 import os
@@ -34,22 +17,8 @@ DATA    = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 OUTDIR  = os.path.join(DATA, "out")
 WEIGHTS = os.path.join(DATA, "weights.txt")
 
-
 def find_next_batch(outdir, processed):
-    """
-    Oldest completed batch we have not consumed yet.
-
-    Keyed by (name, mtime), not name alone. The actor restarts its batch counter
-    at 0 every time it starts - which the daemon does on every power change - so a
-    name-only key makes the learner skip the new batch_0000 as "already seen" and
-    training silently stalls.
-
-    Chosen by mtime rather than by name. Parallel actors write a0_batch_0001,
-    a1_batch_0000, ... and "a0_batch_0001" sorts before "a1_batch_0000", so a
-    name-ordered pick would always prefer actor 0 and let the others' batches
-    age into staleness. Oldest-first is the order that keeps every actor's data
-    equally fresh.
-    """
+    """Oldest completed batch we have not consumed yet."""
     best = None       # (stem, key, mtime)
     try:
         names = os.listdir(outdir)
@@ -70,7 +39,6 @@ def find_next_batch(outdir, processed):
             best = (stem, key, key[1])
     return best[:2] if best else None
 
-
 def read_done(path):
     info = {}
     try:
@@ -82,7 +50,6 @@ def read_done(path):
     except OSError:
         pass
     return info
-
 
 def main():
     # stdout is block-buffered when redirected, which makes a backgrounded
@@ -136,12 +103,7 @@ def main():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--kl-ref", dest="kl_ref", type=float, default=0.03,
                     help="penalty on moving away from the anchor policy; 0 disables")
-    # The anchor used to be the behaviour clone, and stayed the behaviour clone
-    # long after the policy had overtaken it - by 3600 generations it was pulling
-    # a policy that finishes 82% of its runs back towards one cloned from a
-    # single human run that spends 253 ticks outside the deviation limit the
-    # reward enforces. Anchoring to the best known policy instead is what this
-    # term is actually for: not "stay like the clone" but "do not collapse".
+    # Anchor against the best known policy, not the behaviour clone.
     ap.add_argument("--ref-ckpt", dest="ref_ckpt",
                     default=os.path.join(os.path.dirname(__file__), "..", "data", "ckpt_anchor.npz"))
     ap.add_argument("--keep", action="store_true", help="keep consumed batch files")
@@ -152,9 +114,6 @@ def main():
     track = Track(args.track)
     print("track: %d points, %.0f units" % (track.n, track.length))
 
-    # best_s is an absolute position on the track, so progress has to be measured
-    # against where the episode actually started - otherwise an episode spawned at
-    # the 80% checkpoint that instantly falls reports 80% "progress".
     state_s = load_state_arclengths(track, args.states)
     print("start states: %d, arc lengths %.0f .. %.0f" %
           (len(state_s), state_s.min() if len(state_s) else 0,
@@ -168,11 +127,6 @@ def main():
 
     if args.resume and os.path.exists(args.ckpt):
         z = np.load(args.ckpt)
-        # A checkpoint from a different observation or action space cannot be
-        # loaded. Say so plainly: the failure mode otherwise is an opaque shape
-        # error, the learner dying on every restart, and the actors left reading
-        # whatever weights.txt happened to hold - which reports itself only as
-        # "weights size mismatch" spam from the plugin.
         for i, p in enumerate(policy.params()):
             if z["p%d" % i].shape != p.shape:
                 print("checkpoint %s does not fit this build: policy tensor %d is "
@@ -222,11 +176,6 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.log)), exist_ok=True)
     new_log = not os.path.exists(args.log)
 
-    # An existing log written by an older build has fewer columns. Appending
-    # wider rows to it produces a file whose header no longer describes its
-    # contents - every reader here looks columns up BY NAME, so the new ones
-    # would silently read as the wrong thing or vanish. Pad the old rows instead,
-    # leaving the new fields empty, which is what they are: not recorded.
     if not new_log:
         try:
             with open(args.log, encoding="utf-8-sig") as fh:
@@ -331,15 +280,6 @@ def main():
         counts = {"fell": 0, "finished": 0, "timeout": 0, "stuck": 0}
         progs = []
 
-        # Episodes that began at the start of the map and reached the end. This
-        # is the only honest measure of whether the bot can run the map, and
-        # neither existing column can express it: `finished` counts
-        # checkpoint-spawned episodes with ten seconds of track left, and
-        # `best_progress` pins at 1.0 the moment anything finishes and never
-        # moves again. Reading it off the batch files on disk instead was no
-        # good either - the learner deletes them as it consumes them, so two
-        # readings ten minutes apart sampled 40 episodes and 84, and disagreed
-        # by a factor of three. Counted here, where every episode is seen once.
         run0 = fin0 = 0
         fin0_steps = []
 
@@ -355,7 +295,7 @@ def main():
             done = np.zeros(ep.n)
             done[-1] = 1.0 if ep.terminal else 0.0
 
-            # cutoffs bootstrap from the last state we actually saw; true
+            # cutoffs bootstrap from the last observed state; true
             # terminals contribute nothing beyond the episode
             last_v = 0.0 if ep.terminal else float(v[-1])
             adv, ret = compute_gae(rew, v, done, last_value=last_v,
@@ -401,12 +341,6 @@ def main():
         best_prog = float(np.max(progs)) if progs else 0.0
         wall = time.time() - t_start
 
-        # Best AND median. The entropy anneal deliberately shrinks the tail of the
-        # action distribution, so "fastest run seen" is exactly the statistic it
-        # makes look worse while the policy gets better: the 39.178 s record at
-        # gen 6217 was a lucky sample, not a capability - with a deterministic
-        # policy the same opening repeats tick for tick, and its time was 39.52.
-        # Judged on the best alone, sharpening the policy reads as a regression.
         best_full = (min(fin0_steps) * args.frameskip / 66.67) if fin0_steps else 0.0
         med_full = (float(np.median(fin0_steps)) * args.frameskip / 66.67) if fin0_steps else 0.0
 
@@ -425,13 +359,6 @@ def main():
               file=logf)
         logf.flush()
 
-        # Written to a temporary file and moved into place, not written over the
-        # live one. This is the only record of the run - thousands of generations
-        # - and the daemon force-kills this process on every power change and
-        # every restart. A kill landing inside np.savez leaves a truncated .npz
-        # and the whole run is gone, with the previous good copy already
-        # overwritten. The window is small; the cost of losing that bet is the
-        # entire night.
         tmp = args.ckpt + ".tmp"
         np.savez(tmp, gen=gen,
                  ret_mean=value.ret_mean, ret_var=value.ret_var, ret_count=value.ret_count,
@@ -466,7 +393,6 @@ def main():
     logf.close()
     print("consumed %d batches, final generation %d" % (consumed, gen))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

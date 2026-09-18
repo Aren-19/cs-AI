@@ -1,30 +1,4 @@
-"""
-Source engine BSP (VBSP) reader — geometry extraction for the web replay viewer.
-
-Scope: enough of the format to rebuild the *collision-visible world surface* that
-a surfer actually interacts with. That means brush faces and, critically,
-DISPLACEMENTS — surf ramps are almost always displacement surfaces, so a parser
-that skips them renders a map with no ramps in it.
-
-Deliberately not implemented: VTF textures, VMT materials, lightmaps, static
-props, entities beyond spawn info. For judging a surf line the ramp *shape* is
-what matters, and skipping them takes the payload from 86 MB to ~2 MB.
-
-Notable format details this handles:
-
-  * **LZMA-compressed lumps.** Source wraps lumps in its own header
-    (`LZMA` magic, actualSize, lzmaSize, 5 property bytes) and stores raw LZMA
-    with no end marker. Python's lzma cannot read that directly; it has to be
-    repacked into the "alone" container first.
-  * **Displacement tessellation.** A displacement is a power-2/3/4 grid
-    (5x5/9x9/17x17) barycentrically interpolated across its base face's four
-    corners, then pushed along per-vertex normals by per-vertex distances.
-  * **Winding order.** Source faces index into SURFEDGES, which are *signed*
-    indices into EDGES; negative means traverse the edge backwards.
-
-Usage:
-    python tools/bsp.py <map.bsp> --out data/surf_demise.mesh --info
-"""
+"""Read Source BSP geometry for the replay viewer."""
 
 import argparse
 import json
@@ -58,7 +32,6 @@ SURF_HINT = 0x100
 
 LZMA_ID = 0x414D5A4C  # 'LZMA' little-endian
 
-
 class Lump(object):
     __slots__ = ("offset", "length", "version", "fourcc")
 
@@ -68,16 +41,8 @@ class Lump(object):
         self.version = version
         self.fourcc = fourcc
 
-
 def decompress_lump(blob):
-    """
-    Source's compressed-lump container. Layout:
-        uint32 id ('LZMA'), uint32 actualSize, uint32 lzmaSize, uint8 props[5]
-        followed by lzmaSize bytes of raw LZMA (no end-of-stream marker).
-
-    Python's lzma module cannot consume that, so repack into the legacy "alone"
-    container: props[5] + uint64 uncompressed size + payload.
-    """
+    """Source's compressed-lump container. Layout:"""
     if len(blob) < 17:
         return blob
     ident, actual_size, lzma_size = struct.unpack_from("<III", blob, 0)
@@ -90,11 +55,10 @@ def decompress_lump(blob):
         out = lzma.decompress(alone, format=lzma.FORMAT_ALONE)
     except lzma.LZMAError:
         # Some lumps omit the end marker and raise on a clean finish; decompress
-        # incrementally and keep whatever we got.
+        # incrementally and keep what was read.
         d = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
         out = d.decompress(alone)
     return out[:actual_size]
-
 
 class BSP(object):
     def __init__(self, path):
@@ -235,14 +199,8 @@ class BSP(object):
     def entities(self):
         return self.lump(LUMP_ENTITIES).decode("ascii", "replace")
 
-
 def build_world_mesh(bsp, skip_tools=True):
-    """
-    Triangulate the world model's faces.
-
-    Returns (positions, normals, indices, stats). Coordinates stay in Source
-    units and Source axes; the viewer converts.
-    """
+    """Triangulate the world model's faces."""
     verts = bsp.vertexes()
     edges = bsp.edges()
     surfedges = bsp.surfedges()
@@ -308,17 +266,8 @@ def build_world_mesh(bsp, skip_tools=True):
 
     return positions, normals, indices, stats
 
-
 def tess_displacement(ring, di, dverts, add_tri):
-    """
-    Tessellate one displacement.
-
-    The base face is a quad. Its four corners are bilinearly interpolated into a
-    (2^power + 1)^2 grid; each grid vertex is then displaced along its stored
-    normal by its stored distance. `start` identifies which corner of the quad
-    the grid's origin maps to — getting that wrong rotates every ramp by 90
-    degrees, which is subtle enough to look plausible and be completely wrong.
-    """
+    """Tessellate one displacement."""
     if len(ring) != 4:
         return
     power = di["power"]
@@ -359,7 +308,6 @@ def tess_displacement(ring, di, dverts, add_tri):
             n2 = tri_normal(a, cc, d)
             add_tri(a, cc, d, n2)
 
-
 def tri_normal(a, b, c):
     ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
     vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
@@ -368,7 +316,6 @@ def tri_normal(a, b, c):
     if l < 1e-9:
         return (0.0, 0.0, 1.0)
     return (nx / l, ny / l, nz / l)
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -397,13 +344,8 @@ def main():
         print("wrote %s (%.1f MB)" % (args.out, os.path.getsize(args.out) / 1048576.0))
     return 0
 
-
 def write_mesh(path, positions, normals, indices):
-    """
-    Compact binary: magic, counts, then float32 positions, int8 normals, uint32
-    indices. Normals quantised to a byte per axis - plenty for flat shading and
-    it keeps the payload small.
-    """
+    """Compact binary: magic, counts, then float32 positions, int8 normals, uint32"""
     import array
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     nverts = len(positions) // 3
@@ -414,7 +356,6 @@ def write_mesh(path, positions, normals, indices):
         q = array.array("b", [max(-127, min(127, int(round(v * 127)))) for v in normals])
         q.tofile(fh)
         array.array("I", indices).tofile(fh)
-
 
 if __name__ == "__main__":
     sys.exit(main())

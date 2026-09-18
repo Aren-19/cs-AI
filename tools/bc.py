@@ -1,28 +1,4 @@
-"""
-Behaviour cloning: train the policy to imitate the human's actions.
-
-Why this exists. Progress reward alone taught the policy to micro-oscillate
-+-90 degrees every couple of ticks - 19.79 side switches per second against a
-human's 0.95 - because jitter tracks the reference line more tightly than real
-technique does. That is not a training-time problem; it is what the reward asked
-for, and more PPO entrenches it.
-
-Cloning asks the other question: given this situation, what did the human do?
-Their inputs carry the technique the reward cannot express - holding a key
-through a curve and steering with the view, not strafing through tight ramp
-sections, strafing on long airborne stretches.
-
-Input is produced in-engine by csai_demo.inc, which replays the human's recorded
-inputs through real physics and records (observation, action) at the policy's own
-decision cadence. The observations therefore lie on the human's trajectory, which
-is the only place these actions are valid.
-
-    python tools/bc.py                       # train and publish
-    python tools/bc.py --epochs 400 --print  # more passes, verbose
-
-Output is a weights.txt the plugin loads and a ckpt.npz that `learn.py --resume`
-continues from, so PPO carries on from cloned technique rather than scratch.
-"""
+"""Behaviour cloning: fit the policy to a recorded run before PPO starts."""
 
 import argparse
 import os
@@ -36,10 +12,6 @@ sys.path.insert(0, HERE)
 from ppo import Policy, Value, Adam, log_softmax, write_weights, POL_TOTAL
 from rollout import OBS_DIM, N_ACTIONS
 
-# (N_ACTIONS - 1) // 2, not N_ACTIONS // 2: the last action is coast, which
-# presses nothing. With the naive halving a predicted coast (16) fell into the
-# "side -1" bucket and quietly corrupted both the side accuracy and the
-# switch-rate figure the whole cloning effort is judged on.
 N_TRIMS = (N_ACTIONS - 1) // 2   # 0..N_TRIMS-1 = side +1, then side -1, then coast
 COAST = N_ACTIONS - 1
 
@@ -48,11 +20,8 @@ DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 DEFAULT_IN = os.path.join(DATA, r"out\surf_demise_bc.txt")
 DEFAULT_WEIGHTS = os.path.join(DATA, "weights.txt")
 
-
 def load(path):
-    """Returns (obs, actions, frameskip). The capture header carries the frameskip
-    the data was taken at; the decision rate depends on it, and hardcoding 2 made
-    every switch-rate figure 3x too high once frameskip 6 was in use."""
+    """Returns (obs, actions, frameskip). The capture header carries the frameskip"""
     acts, obs = [], []
     frameskip = 2
     with open(path) as fh:
@@ -73,7 +42,6 @@ def load(path):
             acts.append(int(float(p[0])))
             obs.append([float(v) for v in p[1:]])
     return (np.array(obs, dtype=np.float64), np.array(acts, dtype=np.int64), frameskip)
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -182,16 +150,10 @@ def main():
     print("majority-class baseline: %.3f  -> cloning %s"
           % (base, "beats it" if va > base + 0.01 else "does NOT beat it"))
 
-    # Actions are absolute (side, trim), so the two halves of the space are the
-    # two strafe keys. Getting the SIDE right is the technique; the trim is a
-    # few degrees of steering on top of it.
     logits, _ = policy.forward(Xv)
     side_acc = float(((logits.argmax(axis=1) < N_TRIMS) == (yv < N_TRIMS)).mean())
     print("side accuracy (val): %.3f" % side_acc)
 
-    # Switch rate along the human's own trajectory: how often would the cloned
-    # policy change strafe key, against how often the human did? This is the
-    # number the jitter problem was about.
     pred_seq = policy.forward(Xseq)[0].argmax(axis=1) < N_TRIMS
     human_seq = yseq < N_TRIMS
     hz = 66.67 / frameskip
@@ -216,7 +178,6 @@ def main():
     np.savez(ref, gen=1, **{"p%d" % i: p for i, p in enumerate(policy.params())})
     print("wrote %s - frozen anchor for learn.py --kl-ref" % ref)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

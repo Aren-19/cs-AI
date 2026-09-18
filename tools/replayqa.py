@@ -1,22 +1,4 @@
-"""
-Replay quality analysis — does the bot steer like a player?
-
-Finish time alone hides *how* a run was produced. These are the measures that
-actually distinguish surfing from thrashing, and the one that matters most is
-the wish-angle distribution.
-
-Source air acceleration applies only the component of the horizontal wish vector
-perpendicular to velocity: addspeed = wishspd - speed*cos(phi). At surf speed
-(3614 u/s on surf_demise) that means any |phi| < 89.5 deg produces *zero*
-acceleration, and phi near 180 brakes at up to sv_airaccelerate*maxspeed*frametime
-= 720 u/s per tick. A human therefore sits at |phi| ~ 90 essentially always:
-measured 98.1% of frames within (85, 95) degrees.
-
-So "what fraction of frames are in the usable window" is a direct, physical
-measure of whether a policy has found the control law at all.
-
-    python tools/replayqa.py <a.replay> [b.replay ...]
-"""
+"""Control-quality stats for a replay: strafe angle, key changes, speed."""
 
 import math
 import os
@@ -28,7 +10,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from replay import parse_replay
 
 IN_MOVELEFT, IN_MOVERIGHT = 512, 1024
-
 
 def analyse(path):
     r = parse_replay(path)
@@ -51,13 +32,6 @@ def analyse(path):
     big = adyaw > 90.0
     smooth = adyaw[~big]
 
-    # A side switch is a change of STRAFE KEY, read from the buttons.
-    #
-    # This used to be counted as a >90 deg jump in view yaw, which measures
-    # nothing: the view turns smoothly through a switch, only the key changes.
-    # That version reported 0.00/s for every replay including the human's - who
-    # demonstrably switches 10 times in the first 15.8% of this map - and the
-    # bogus zero was taken as evidence the policy never switched sides.
     keys = []
     for f in fr:
         left = bool(f.buttons & IN_MOVELEFT)
@@ -101,7 +75,6 @@ def analyse(path):
         "speed_max": float(np.max(speeds)),
     }
 
-
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -129,7 +102,6 @@ def main():
     print("flips/s    = strafe-key switches per second, from the buttons.")
     print("             Human on surf_demise: 0.77/s overall, 98.1%% phi in window.")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

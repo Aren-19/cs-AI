@@ -1,19 +1,3 @@
-/**
- * csai_train - the actor side of the training loop.
- *
- * Actor/learner split over files, because this server has no socket extension
- * and per-tick IPC would throttle throughput regardless:
- *
- *   plugin  ->  data/csai/out/batch_NNNN.bin   (trajectories)
- *   plugin  ->  data/csai/out/batch_NNNN.done  (marker: batch complete)
- *   python  ->  data/csai/weights.txt          (new policy, with a generation)
- *
- * The plugin polls for a weights generation newer than the one it is running.
- * In async mode it does not wait at all and just keeps collecting with whatever
- * policy it has - useful for throughput measurement and for checking the data
- * path before any learning exists.
- */
-
 #if defined _csai_train_included
 	#endinput
 #endif
@@ -22,15 +6,6 @@
 bool g_bTrainSync      = true;     // wait for a new policy between batches
 bool g_bTrainWaiting   = false;
 int  g_iTrainBatches   = 0;        // batches remaining; <0 = unlimited
-/**
- * Which actor process this is, when several run in parallel.
- *
- * One srcds instance is single-threaded and saturates at ~5400 ticks/s, so the
- * only way past that on a 12-core machine is more instances. They share the
- * weights file (read-only) and differ only in where their batches land, so the
- * batch name carries the actor id - otherwise every actor would write
- * batch_0000 over the top of the others.
- */
 int  g_iActorId        = 0;
 
 float g_fEvalSavedMix  = 0.0;
@@ -61,12 +36,6 @@ stock void Train_WriteDoneMarker()
 	if (f == null)
 		return;
 
-	// A tiny summary so the learner can log progress without parsing the binary.
-	// The learner rebuilds every observation from its own copy of the track. If
-	// the two ever differ - a regenerated centerline, a half-restarted actor -
-	// the importance ratios are computed against a distribution nothing sampled
-	// and training quietly degrades with no error anywhere. So the batch states
-	// what it was produced against and the learner refuses to mix them.
 	f.WriteLine("track_length %.1f", g_fTrackLength);
 	f.WriteLine("episodes %d", g_iBatchEpisodes);
 	f.WriteLine("gen %d", g_iPolicyGen);
@@ -105,9 +74,6 @@ stock void Train_Begin(int batches, bool sync, bool quitAfter)
 	if (g_iStateCount == 0)
 	{
 		PrintToServer("[CsAI] train: no start states loaded for this map");
-		// Quit rather than sit idle: an armed headless run that returns here
-		// never exits, so the Python side waits out its whole timeout and
-		// reports a timeout instead of the actual reason.
 		if (g_bQuitAfter)
 			ServerCommand("quit");
 		return;
@@ -148,11 +114,6 @@ stock void Train_Begin(int batches, bool sync, bool quitAfter)
 
 stock void Train_Stop()
 {
-	// Cleared here too. It used to be reset only at the natural end of an eval,
-	// so stopping one part-way (or changing map during one) left g_bEval set -
-	// and the next csai_train routed its first finished episode into
-	// Eval_EpisodeDone, printed "eval complete", and stopped. A training run
-	// that silently did one episode.
 	g_bEval = false;
 	g_iEvalLeft = 0;
 	g_bTraining = false;
@@ -213,10 +174,6 @@ stock void Train_EndOfBatch()
 	Ep_Begin();
 }
 
-/**
- * Called from OnPlayerRunCmd for the bot while training. Returns Plugin_Changed
- * when it has written inputs.
- */
 stock bool Train_Tick(int client, int &buttons, float movement[3], float angles[3])
 {
 	if (g_bTrainWaiting)
@@ -258,14 +215,6 @@ stock void Train_Poll()
 	}
 }
 
-
-// ------------------------------------------------------------ evaluation ----
-//
-// Training reports progress *gained* from random checkpoints, which is the right
-// signal for learning but says nothing about whether the agent can run the map.
-// Evaluation answers that: greedy (argmax) actions, always from state 0, and the
-// only number that counts is whether it reaches the end and in what time.
-
 int   g_iEvalLeft    = 0;
 int   g_iEvalDone    = 0;
 int   g_iEvalFinish  = 0;
@@ -285,9 +234,6 @@ stock void Eval_Begin(int runs)
 	Train_WeightsPath(wpath, sizeof(wpath));
 	if (!Pol_Load(wpath) && !g_bPolicyLoaded)
 	{
-		// With no weights every logit is zero, argmax picks action 0 forever, and
-		// the run still reports a perfectly plausible "0/N finished, best 3.2%"
-		// for a policy that does not exist.
 		PrintToServer("[CsAI] eval: no usable weights at %s - refusing to run", wpath);
 		if (g_bQuitAfter)
 			ServerCommand("quit");
@@ -305,10 +251,6 @@ stock void Eval_Begin(int runs)
 	g_fEvalBestFrac = 0.0;
 	g_fEvalBestTime = 0.0;
 
-	// Must hold for the WHOLE eval, not just the first episode: Ep_Begin is
-	// called again from Eval_EpisodeDone, and restoring this early made runs 2..N
-	// start from random checkpoints. That is why a supposedly deterministic
-	// greedy eval produced 3.8% / 27.1% / 34.8% / 45.7% on identical settings.
 	g_iEvalSavedStates = g_iTrainStates;
 	g_iTrainStates = 1;         // always state 0
 	g_fEvalSavedMix = g_fStateMix;

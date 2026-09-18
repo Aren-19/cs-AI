@@ -1,24 +1,4 @@
-"""
-Local backend for the offstyles replay viewer.
-
-offstyles-web is a frontend only; its Vite config proxies /api to the live
-offstyles.net, whose backend is closed. That is fine for browsing their records
-but useless for us: our bot's runs are not in their database. This server
-implements the three endpoints the viewer actually needs, against local files.
-
-    POST /api/csspak/batch    CS:S assets by Source path, from the local install
-    GET  /api/replay?id=NAME  a shavit .replay file
-    GET  /api/times           minimal record list so the UI has something to show
-                              ?sort=Newest (default) | Oldest | Fastest | Slowest
-    GET  /maps/NAME.bsp.bz2   the map, bz2-compressed (cached after first build)
-
-Wire format for csspak/batch, taken from CSPakMount in noclipRenderer.ts:
-request is a JSON array of up to 64 paths; response is, per path in order, a
-little-endian uint32 length followed by that many bytes, where 0xFFFFFFFF means
-"missing". Order matters - the client zips results back onto its request list.
-
-    python tools/webserve.py [--port 8787]
-"""
+"""Local HTTP server for the replay viewer."""
 
 import argparse
 import bz2
@@ -51,7 +31,6 @@ _fs_lock = threading.Lock()
 _bz2_locks = {}
 _bz2_locks_guard = threading.Lock()
 
-
 def fs():
     global _fs
     with _fs_lock:
@@ -62,7 +41,6 @@ def fs():
             print("[csspak] mounted %d vpk(s), %d entries, %d loose root(s) in %.1fs"
                   % (s["vpks"], s["entries"], s["roots"], time.time() - t0))
         return _fs
-
 
 def find_replay(name):
     """Accept a bare name, a name with .replay, or an absolute path."""
@@ -76,15 +54,8 @@ def find_replay(name):
             return p
     return None
 
-
 def replay_header(path):
-    """
-    Read map/time/frames straight out of the shavit header.
-
-    The viewer needs the real MAP name to fetch the BSP, and a filename like
-    surf_demise_gen116.replay is not it. The header carries the authoritative
-    value, so read that rather than guessing from the filename.
-    """
+    """Read map/time/frames straight out of the shavit header."""
     try:
         with open(path, "rb") as fh:
             blob = fh.read(256)
@@ -111,7 +82,6 @@ def replay_header(path):
     except (OSError, ValueError, struct.error, IndexError):
         return None
 
-
 def list_replays():
     out = []
     for d in REPLAY_DIRS:
@@ -130,14 +100,8 @@ def list_replays():
                             "frames": int(info.get("frames") or 0)})
     return out
 
-
 def bsp_bz2(map_name):
-    """
-    The viewer fetches <map>.bsp.bz2 and decompresses in a worker. Compressing an
-    86 MB BSP takes a while, so do it once and cache. Most of that size is the
-    embedded pakfile (already-compressed textures), so the ratio is poor - this
-    is a disk/latency trade, not a bandwidth one, and it is all localhost.
-    """
+    """The viewer fetches <map>.bsp.bz2 and decompresses in a worker. Compressing an"""
     safe = os.path.basename(map_name)
     src = os.path.join(MAPS_DIR, safe + ".bsp")
     if not os.path.isfile(src):
@@ -170,7 +134,6 @@ def bsp_bz2(map_name):
         print("[maps] %s -> %.0f MB in %.1fs"
               % (safe, os.path.getsize(dst) / 1048576.0, time.time() - t0))
     return dst
-
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -241,9 +204,6 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/api/times":
             rows = self._times()
-            # The UI passes filters and expects them honoured; returning everything
-            # leaves /run/<id> stuck on "Loading record..." because it cannot tell
-            # which row it asked for.
             ids = q.get("ids")
             if ids:
                 want = set()
@@ -255,13 +215,6 @@ class Handler(BaseHTTPRequestHandler):
             if q.get("has_replay"):
                 pass                      # every row here is backed by a replay file
 
-            # Newest first by default. The files were previously listed in
-            # filename order, which puts surf_demise_gen1000 ahead of gen999 and
-            # makes the most recent run hard to find - and the newest run is
-            # almost always the one you want to watch.
-            #
-            # The UI already sends ?sort= with one of these names and defaults to
-            # Newest; it was simply being ignored here.
             sort = (q.get("sort", ["Newest"])[0] or "Newest").lower()
             if sort in ("oldest", "old"):
                 rows.sort(key=lambda r: r["date"])
@@ -326,10 +279,6 @@ class Handler(BaseHTTPRequestHandler):
                 "is_banned": False,
                 "invalid_ref": None,
                 "server": {"hostname": "local", "key_id": "local"},
-                # The record view calls .toFixed() on these, so they must exist
-                # and be numeric. Computed from the replay rather than stubbed -
-                # sync is the metric that actually says whether the bot strafes
-                # like a human.
                 "sync": st["sync"],
                 "strafes": st["strafes"],
                 "jumps": st["jumps"],
@@ -363,7 +312,6 @@ class Handler(BaseHTTPRequestHandler):
                 chunks.append(data)
         self._send(200, b"".join(chunks))
 
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8787)
@@ -390,7 +338,6 @@ def main():
     except KeyboardInterrupt:
         print("\nstopping")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
