@@ -231,7 +231,24 @@ if ($Stop) {
         if ($alive.Count -eq 0) { break }
         Start-Sleep -Seconds 1
     }
-    Remove-Item $StopFile -ErrorAction SilentlyContinue
+
+    # If it still has not gone, end it directly. Stop has to mean stopped: the
+    # marker alone is not enough, because killing the actors sends the daemon
+    # straight into restarting them and it can spend a minute in there without
+    # once looking at the marker.
+    $left = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+              Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*-File*daemon.ps1*' -and
+                             $_.CommandLine -notlike '*-Stop*' } |
+              Where-Object {
+                  $theirs = if ($_.CommandLine -match '-Slot\s+(\S+)') { $Matches[1] } else { '' }
+                  $theirs -eq $Slot
+              })
+    foreach ($d in $left) {
+        Write-Log "  supervisor $($d.ProcessId) did not exit on its own - ending it"
+        Stop-Process -Id $d.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 2
+    Stop-All                      # anything the supervisor restarted on its way out
     Write-Log 'stopped'
     exit 0
 }
@@ -247,7 +264,9 @@ $others = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -Error
                 $theirs -eq $Slot
             })
 if ($others.Count -gt 0) {
-    Write-Log "another daemon is already running on this slot (pid $($others[0].ProcessId)) - refusing to start a second"
+    $mine = if ($Slot) { $Slot } else { 'main' }
+    Write-Log "refusing to start: slot '$mine' already has a supervisor (pid $($others[0].ProcessId))"
+    Write-Log "  its command line: $($others[0].CommandLine)"
     exit 1
 }
 
@@ -255,7 +274,7 @@ Remove-Item $StopFile -ErrorAction SilentlyContinue
 if ($Power) { Set-Power $Power }
 $level = Get-Power
 
-Write-Log '================ CsAI training daemon ================'
+Write-Log ("================ CsAI training daemon ================  slot: " + $(if ($Slot) { $Slot } else { 'main' }))
 Write-Log "power: $level - $($Levels[$level].Desc)"
 Stop-All
 Start-Sleep -Seconds 2
@@ -331,6 +350,11 @@ while ($true) {
         }
         $appliedLevel = $want
     }
+
+    # Check again before reviving anything: Stop-All kills the actors, so without
+    # this the daemon spends the next half minute restarting processes that were
+    # deliberately stopped, and only then reads the request.
+    if (Test-Path $StopFile) { Write-Log 'stop requested'; Stop-All; break }
 
     # keep both halves alive
     if (-not (Get-Procs 'python.exe' '*learn.py*')) {
