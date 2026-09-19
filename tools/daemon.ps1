@@ -28,7 +28,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $Root = Split-Path -Parent $PSScriptRoot
-$PowerFile = Join-Path $Root 'data\power.txt'
+$PowerFile = Join-Path (Join-Path $Root 'data') $(if ($Slot) { "power_$Slot.txt" } else { 'power.txt' })
 $LogFile = Join-Path $Root 'logs\daemon.log'
 $TrainLog = Join-Path $Root 'data\train_log.csv'
 $StopFile = Join-Path $Root $(if ($Slot) { "data\daemon_$Slot.stop" } else { 'data\daemon.stop' })

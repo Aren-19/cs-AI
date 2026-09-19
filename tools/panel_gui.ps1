@@ -1,4 +1,5 @@
-param([switch]$NoAutoRefresh, [switch]$SelfTest)
+param([switch]$NoAutoRefresh, [switch]$SelfTest,
+      [string]$Start = '')   # comma separated slots to start on launch
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -86,24 +87,39 @@ function Get-Instances {
             $cpu = $pr.TotalProcessorTime.TotalSeconds
             $mem = [math]::Round($pr.WorkingSet64 / 1MB)
         }
+        $slotOf = 'main'
+        if ($cl -match '\+csai_slot\s+(\S+)') { $slotOf = $Matches[1] }
+        elseif ($cl -match '-Slot\s+(\S+)')     { $slotOf = $Matches[1] }
+        elseif ($cl -match 'out_(\w+)')          { $slotOf = $Matches[1] }
+        elseif ($cl -match 'learner_(\w+)\.')   { $slotOf = $Matches[1] }
         $rows += [pscustomobject]@{
-            Role = $role; ProcId = [int]$ci.ProcessId; CpuSec = $cpu; Mem = $mem; Detail = $detail
+            Role = $role; ProcId = [int]$ci.ProcessId; CpuSec = $cpu; Mem = $mem
+            Detail = $detail; SlotName = $slotOf
         }
     }
     $order = { if ($_.Role -like 'actor*') { 1 } elseif ($_.Role -eq 'eval') { 2 } else { 0 } }
     return $rows | Sort-Object @{ Expression = $order }, Role
 }
 
+function Power-File {
+    $slot = Selected-Slot
+    if ($slot -eq 'main') { return $PowerFile }
+    return (Join-Path $Data "power_$slot.txt")
+}
+
 function Get-Power {
-    if (Test-Path $PowerFile) {
-        $v = (Get-Content $PowerFile -Raw -ErrorAction SilentlyContinue)
+    $pf = Power-File
+    if (Test-Path $pf) {
+        $v = (Get-Content $pf -Raw -ErrorAction SilentlyContinue)
         if ($v) { return $v.Trim([char]0xFEFF + " `t`r`n").ToLower() }
     }
     return 'high'
 }
 
 function Get-Progress {
-    $log = Join-Path $Data 'train_log.csv'
+    $slot = Selected-Slot
+    $log = if ($slot -eq 'main') { Join-Path $Data 'train_log.csv' }
+           else { Join-Path $Data "train_log_$slot.csv" }
     if (-not (Test-Path $log)) { return $null }
     try {
         # Columns by name. The log has gained columns twice; fixed offsets would
@@ -113,7 +129,20 @@ function Get-Progress {
         $iRun = [array]::IndexOf($head, 'runs_from_start')
         $iFin = [array]::IndexOf($head, 'finished_from_start')
         $iMed = [array]::IndexOf($head, 'median_full_run_s')
-        if ($iGen -lt 0 -or $iRun -lt 0 -or $iFin -lt 0 -or $iMed -lt 0) { return $null }
+        $iRet = [array]::IndexOf($head, 'mean_return')
+        if ($iGen -lt 0) { return $null }
+        if ($iRun -lt 0 -or $iFin -lt 0 -or $iMed -lt 0) {
+            $t = @(Get-Content $log -Tail 12 -ErrorAction SilentlyContinue)
+            if ($t.Count -lt 1 -or $iRet -lt 0) { return $null }
+            $r = 0.0; $n = 0; $g = ''
+            foreach ($ln in $t) {
+                $c = $ln.Split(',')
+                if ($c.Count -le $iRet) { continue }
+                $g = $c[$iGen]; $r += [double]$c[$iRet]; $n++
+            }
+            if (-not $n) { return $null }
+            return [pscustomobject]@{ Gen = $g; Rate = -1; Median = ($r / $n) }
+        }
         $need = (@($iGen, $iRun, $iFin, $iMed) | Measure-Object -Maximum).Maximum + 1
 
         $tail = @(Get-Content $log -Tail 40 -ErrorAction SilentlyContinue)
@@ -155,7 +184,8 @@ $list.View = 'Details'
 $list.FullRowSelect = $true
 $list.HideSelection = $false
 $list.Anchor = 'Top,Bottom,Left,Right'
-[void]$list.Columns.Add('what', 110)
+[void]$list.Columns.Add('what', 92)
+[void]$list.Columns.Add('slot', 68)
 [void]$list.Columns.Add('pid', 60)
 [void]$list.Columns.Add('cpu', 60)
 [void]$list.Columns.Add('memory', 70)
@@ -181,30 +211,37 @@ function New-PanelButton($text, $x, $y, $w, $h) {
     return $b
 }
 
-$bStart   = New-PanelButton 'start training' 686 56  110 30
-$bStop    = New-PanelButton 'stop training'  802 56  110 30
+$cmbSlot = New-Object System.Windows.Forms.ComboBox
+$cmbSlot.Location = New-Object System.Drawing.Point(686, 56)
+$cmbSlot.Size = New-Object System.Drawing.Size(226, 24)
+$cmbSlot.DropDownStyle = 'DropDownList'
+$cmbSlot.Anchor = 'Top,Right'
+$form.Controls.Add($cmbSlot)
+
+$bStart   = New-PanelButton 'start'  686 84  110 30
+$bStop    = New-PanelButton 'stop'   802 84  110 30
 
 $lblPow = New-Object System.Windows.Forms.Label
 $lblPow.Text = 'power'
-$lblPow.Location = New-Object System.Drawing.Point(686, 96)
+$lblPow.Location = New-Object System.Drawing.Point(686, 124)
 $lblPow.Size = New-Object System.Drawing.Size(45, 22)
 $lblPow.Anchor = 'Top,Right'
 $form.Controls.Add($lblPow)
 
 $cmbPow = New-Object System.Windows.Forms.ComboBox
-$cmbPow.Location = New-Object System.Drawing.Point(733, 92)
+$cmbPow.Location = New-Object System.Drawing.Point(733, 120)
 $cmbPow.Size = New-Object System.Drawing.Size(179, 24)
 $cmbPow.DropDownStyle = 'DropDownList'
 $cmbPow.Anchor = 'Top,Right'
 foreach ($l in @('idle', 'low', 'medium', 'high', 'max')) { [void]$cmbPow.Items.Add($l) }
 $form.Controls.Add($cmbPow)
 
-$bShow    = New-PanelButton 'show window'   686 128 110 30
-$bHide    = New-PanelButton 'hide window'   802 128 110 30
-$bHideAll = New-PanelButton 'hide them all' 686 164 226 28
-$bViewer  = New-PanelButton 'replay viewer' 686 200 110 30
-$bReport  = New-PanelButton 'report'        802 200 110 30
-$bFolder  = New-PanelButton 'open folder'   686 236 226 28
+$bShow    = New-PanelButton 'show window'   686 156 110 30
+$bHide    = New-PanelButton 'hide window'   802 156 110 30
+$bHideAll = New-PanelButton 'hide them all' 686 192 226 28
+$bViewer  = New-PanelButton 'replay viewer' 686 228 110 30
+$bReport  = New-PanelButton 'report'        802 228 110 30
+$bFolder  = New-PanelButton 'open folder'   686 264 226 28
 
 $logPick = New-Object System.Windows.Forms.ComboBox
 $logPick.Location = New-Object System.Drawing.Point(12, 378)
@@ -225,11 +262,29 @@ $logBox.Font = New-Object System.Drawing.Font('Consolas', 9)
 $logBox.Anchor = 'Bottom,Left,Right'
 $form.Controls.Add($logBox)
 
+function Get-Slots {
+    # "main" plus every data/daemon_args_<slot>.txt on disk, so a new experiment
+    # appears in the list by dropping its arguments in a file.
+    $out = @('main')
+    Get-ChildItem (Join-Path $Data 'daemon_args_*.txt') -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            if ($_.Name -match '^daemon_args_(.+)\.txt$') { $out += $Matches[1] }
+        }
+    return $out
+}
+
+function Selected-Slot {
+    if ($cmbSlot.SelectedItem) { return [string]$cmbSlot.SelectedItem }
+    return 'main'
+}
+
 function Get-DaemonArgs {
     # Kept in a file rather than baked in here, so the panel starts training with
     # whatever settings the run is actually using instead of a stale copy.
-    if (Test-Path $ArgsFile) {
-        $line = (Get-Content $ArgsFile -Raw -ErrorAction SilentlyContinue)
+    $slot = Selected-Slot
+    $file = if ($slot -eq 'main') { $ArgsFile } else { Join-Path $Data "daemon_args_$slot.txt" }
+    if (Test-Path $file) {
+        $line = (Get-Content $file -Raw -ErrorAction SilentlyContinue)
         if ($line) {
             $t = $line.Trim()
             if ($t) { return @($t.Split(' ') | Where-Object { $_ -ne '' }) }
@@ -240,7 +295,7 @@ function Get-DaemonArgs {
 
 function Get-SelectedPid {
     if ($list.SelectedItems.Count -eq 0) { return -1 }
-    return [int]$list.SelectedItems[0].SubItems[1].Text
+    return [int]$list.SelectedItems[0].SubItems[2].Text
 }
 
 $bStart.Add_Click({
@@ -250,14 +305,16 @@ $bStart.Add_Click({
 
 $bStop.Add_Click({
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'tools\daemon.ps1'), '-Stop')
+    $slot = Selected-Slot
+    if ($slot -ne 'main') { $a += @('-Slot', $slot) }
     Start-Process -FilePath 'powershell' -ArgumentList $a -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
 })
 
 $cmbPow.Add_SelectedIndexChanged({
-    if ($cmbPow.SelectedItem) {
+    if ($cmbPow.SelectedItem -and -not $script:SlotSwitching) {
         # The daemon re-reads this file every few seconds, so changing the level
         # needs nothing restarted and nothing trained is lost.
-        Set-Content -Path $PowerFile -Value $cmbPow.SelectedItem -Encoding ascii
+        Set-Content -Path (Power-File) -Value $cmbPow.SelectedItem -Encoding ascii
     }
 })
 
@@ -274,7 +331,7 @@ $bHide.Add_Click({
 $bHideAll.Add_Click({
     Update-WindowMap
     foreach ($i in $list.Items) {
-        if ($i.SubItems[0].Text -ne 'panel') { [void](Show-ProcWindow ([int]$i.SubItems[1].Text) $false) }
+        if ($i.SubItems[0].Text -ne 'panel') { [void](Show-ProcWindow ([int]$i.SubItems[2].Text) $false) }
     }
 })
 
@@ -307,6 +364,7 @@ $script:PrevCpu = @{}
 $script:PrevAt = Get-Date
 
 $script:Tidied = @{}
+$script:SlotSwitching = $false
 
 function Update-Panel {
     Update-WindowMap
@@ -316,7 +374,7 @@ function Update-Panel {
 
     $rows = @(Get-Instances)
     $keep = @{}
-    foreach ($i in $list.SelectedItems) { $keep[[int]$i.SubItems[1].Text] = $true }
+    foreach ($i in $list.SelectedItems) { $keep[[int]$i.SubItems[2].Text] = $true }
 
     $list.BeginUpdate()
     $list.Items.Clear()
@@ -335,6 +393,7 @@ function Update-Panel {
             if ([CsAI.Win]::IsWindowVisible($script:WinByPid[$r.ProcId])) { $win = 'shown' } else { $win = 'hidden' }
         }
         $it = New-Object System.Windows.Forms.ListViewItem($r.Role)
+        [void]$it.SubItems.Add($r.SlotName)
         [void]$it.SubItems.Add([string]$r.ProcId)
         [void]$it.SubItems.Add(('{0:N0}%' -f $pct))
         [void]$it.SubItems.Add(('{0} MB' -f $r.Mem))
@@ -360,10 +419,14 @@ function Update-Panel {
     $head += ('   power: ' + (Get-Power) + '   game servers: ' + $actors)
     $pg = Get-Progress
     if ($pg) {
-        $head += ("`r`ngeneration " + $pg.Gen +
-                  ('   finishing {0:N0}% of runs' -f $pg.Rate) +
-                  ('   median run {0:N2}s' -f $pg.Median) +
-                  '   the time to beat is 39.05s')
+        if ($pg.Rate -lt 0) {
+            $head += ("`r`ngeneration " + $pg.Gen + ('   mean return {0:N0}' -f $pg.Median))
+        } else {
+            $head += ("`r`ngeneration " + $pg.Gen +
+                      ('   finishing {0:N0}% of runs' -f $pg.Rate) +
+                      ('   median run {0:N2}s' -f $pg.Median) +
+                      '   the time to beat is 39.05s')
+        }
     }
     $status.Text = $head
 
@@ -382,6 +445,18 @@ function Update-Panel {
     }
 }
 
+foreach ($sl in (Get-Slots)) { [void]$cmbSlot.Items.Add($sl) }
+$cmbSlot.SelectedIndex = 0
+$cmbSlot.Add_SelectedIndexChanged({
+    try { $script:SlotSwitching = $true; $cmbPow.SelectedItem = (Get-Power); $script:SlotSwitching = $false; Update-Panel } catch {}
+})
+
+foreach ($sl in (Get-Slots)) {
+    if ($sl -eq 'main') { continue }
+    [void]$logPick.Items.Add("learner_$sl.log")
+    [void]$logPick.Items.Add("learner_$sl.err.log")
+}
+
 $cmbPow.SelectedItem = (Get-Power)
 
 $timer = New-Object System.Windows.Forms.Timer
@@ -396,15 +471,32 @@ if ($SelfTest) {
     Write-Host $status.Text
     Write-Host ''
     foreach ($i in $list.Items) {
-        Write-Host ('  {0,-12} {1,-7} {2,-6} {3,-8} {4,-7} {5}' -f
+        Write-Host ('  {0,-12} {1,-8} {2,-7} {3,-6} {4,-8} {5,-7} {6}' -f
             $i.SubItems[0].Text, $i.SubItems[1].Text, $i.SubItems[2].Text,
-            $i.SubItems[3].Text, $i.SubItems[4].Text, $i.SubItems[5].Text)
+            $i.SubItems[3].Text, $i.SubItems[4].Text, $i.SubItems[5].Text, $i.SubItems[6].Text)
     }
     Write-Host ''
     Write-Host ('log tail: ' + $logBox.Text.Length + ' characters from ' + $logPick.SelectedItem)
     exit 0
 }
 
-$form.Add_Shown({ try { Update-Panel } catch {} })
+# Start whatever was asked for, through the panel's own start path, so training
+# is launched by this process rather than by a separate console.
+$form.Add_Shown({
+    try { Update-Panel } catch {}
+    if ($Start) {
+        foreach ($sl in ($Start -split ',')) {
+            $sl = $sl.Trim()
+            if (-not $sl) { continue }
+            $i = $cmbSlot.Items.IndexOf($sl)
+            if ($i -lt 0) { continue }
+            $cmbSlot.SelectedIndex = $i
+            $bStart.PerformClick()
+            Start-Sleep -Seconds 8
+        }
+        $cmbSlot.SelectedIndex = 0
+        try { Update-Panel } catch {}
+    }
+})
 $form.Add_FormClosed({ $timer.Stop() })
 [void]$form.ShowDialog()

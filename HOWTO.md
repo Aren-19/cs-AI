@@ -1,6 +1,7 @@
 # Running it
 
-Run `CsAI.bat`. It opens a single window.
+Run `CsAI.bat`. It opens a single window and starts training from it. Nothing
+else opens a console.
 
 ```
   training: running   power: high   game servers: 6
@@ -25,6 +26,16 @@ window**, or double-clicking the row, brings that console up; the same again
 hides it.
 
 The lower half tails the logs. The drop-down selects which.
+
+### Slots
+
+A slot is an independent training run: its own weights, batches, checkpoint, log
+and power level. `main` trains the bot to run the map; `windup` trains the
+opening. The slot drop-down picks which one **start**, **stop** and the power
+level apply to, and the list shows every process with the slot it belongs to.
+
+A new slot is a file: drop its daemon arguments in `data/daemon_args_<name>.txt`
+and it appears in the drop-down.
 
 Closing the panel does not stop training. It continues in the background until
 **stop training** is pressed.
