@@ -214,6 +214,24 @@ if ($Stop) {
     Write-Log 'stopping training'
     New-Item -ItemType File -Force -Path $StopFile | Out-Null
     Stop-All
+
+    # Wait for the supervisor itself to exit. It only notices the stop file on
+    # its next poll, so returning immediately means a restart races it: the old
+    # daemon is still alive, refuses the new one, and training quietly stays
+    # down with nobody having reported an error.
+    $slotTagW = if ($Slot) { "-Slot $Slot" } else { '' }
+    for ($i = 0; $i -lt 40; $i++) {
+        $alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+                   Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*-File*daemon.ps1*' -and
+                                  $_.CommandLine -notlike '*-Stop*' } |
+                   Where-Object {
+                       $theirs = if ($_.CommandLine -match '-Slot\s+(\S+)') { $Matches[1] } else { '' }
+                       $theirs -eq $Slot
+                   })
+        if ($alive.Count -eq 0) { break }
+        Start-Sleep -Seconds 1
+    }
+    Remove-Item $StopFile -ErrorAction SilentlyContinue
     Write-Log 'stopped'
     exit 0
 }
