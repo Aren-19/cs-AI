@@ -103,7 +103,7 @@ function Get-Instances {
 
 function Power-File {
     $slot = Selected-Slot
-    if ($slot -eq 'main') { return $PowerFile }
+    if ($slot -eq 'all' -or $slot -eq 'main') { return $PowerFile }
     return (Join-Path $Data "power_$slot.txt")
 }
 
@@ -118,7 +118,7 @@ function Get-Power {
 
 function Get-Progress {
     $slot = Selected-Slot
-    $log = if ($slot -eq 'main') { Join-Path $Data 'train_log.csv' }
+    $log = if ($slot -eq 'main' -or $slot -eq 'all') { Join-Path $Data 'train_log.csv' }
            else { Join-Path $Data "train_log_$slot.csv" }
     if (-not (Test-Path $log)) { return $null }
     try {
@@ -262,7 +262,7 @@ $logBox.Font = New-Object System.Drawing.Font('Consolas', 9)
 $logBox.Anchor = 'Bottom,Left,Right'
 $form.Controls.Add($logBox)
 
-function Get-Slots {
+function Get-RealSlots {
     # "main" plus every data/daemon_args_<slot>.txt on disk, so a new experiment
     # appears in the list by dropping its arguments in a file.
     $out = @('main')
@@ -271,6 +271,19 @@ function Get-Slots {
             if ($_.Name -match '^daemon_args_(.+)\.txt$') { $out += $Matches[1] }
         }
     return $out
+}
+
+function Get-Slots {
+    # "all" is what the buttons act on unless a single slot is picked. Stopping
+    # one slot while another supervisor is still alive looks exactly like stop
+    # not working: the actors go, and the other supervisor brings them back.
+    return @('all') + (Get-RealSlots)
+}
+
+function Slots-ToActOn {
+    $sel = Selected-Slot
+    if ($sel -eq 'all') { return (Get-RealSlots) }
+    return @($sel)
 }
 
 function Selected-Slot {
@@ -299,22 +312,46 @@ function Get-SelectedPid {
 }
 
 $bStart.Add_Click({
-    $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'tools\daemon.ps1')) + (Get-DaemonArgs)
-    Start-Process -FilePath 'powershell' -ArgumentList $a -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
+    foreach ($sl in (Slots-ToActOn)) {
+        $file = if ($sl -eq 'main') { $ArgsFile } else { Join-Path $Data "daemon_args_$sl.txt" }
+        $sa = @('-Map', 'surf_demise')
+        if (Test-Path $file) {
+            $line = (Get-Content $file -Raw -ErrorAction SilentlyContinue)
+            if ($line -and $line.Trim()) { $sa = @($line.Trim() -split '\s+') }
+        }
+        $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+               '-File', (Join-Path $Root 'tools\daemon.ps1')) + $sa
+        Start-Process -FilePath 'powershell' -ArgumentList $a -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
+        Start-Sleep -Seconds 10
+    }
 })
 
 $bStop.Add_Click({
-    $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'tools\daemon.ps1'), '-Stop')
-    $slot = Selected-Slot
-    if ($slot -ne 'main') { $a += @('-Slot', $slot) }
-    Start-Process -FilePath 'powershell' -ArgumentList $a -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
+    $bStop.Enabled = $false
+    try {
+        foreach ($sl in (Slots-ToActOn)) {
+            $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                   '-File', (Join-Path $Root 'tools\daemon.ps1'), '-Stop')
+            if ($sl -ne 'main') { $a += @('-Slot', $sl) }
+            # Waited on, not fired and forgotten: the next slot must not start
+            # being stopped while this one is still shutting down.
+            Start-Process -FilePath 'powershell' -ArgumentList $a -WorkingDirectory $Root `
+                          -WindowStyle Hidden -Wait | Out-Null
+        }
+    } finally {
+        $bStop.Enabled = $true
+        try { Update-Panel } catch {}
+    }
 })
 
 $cmbPow.Add_SelectedIndexChanged({
     if ($cmbPow.SelectedItem -and -not $script:SlotSwitching) {
         # The daemon re-reads this file every few seconds, so changing the level
         # needs nothing restarted and nothing trained is lost.
-        Set-Content -Path (Power-File) -Value $cmbPow.SelectedItem -Encoding ascii
+        foreach ($sl in (Slots-ToActOn)) {
+            $pf = if ($sl -eq 'main') { $PowerFile } else { Join-Path $Data "power_$sl.txt" }
+            Set-Content -Path $pf -Value $cmbPow.SelectedItem -Encoding ascii
+        }
     }
 })
 
@@ -412,11 +449,19 @@ function Update-Panel {
     foreach ($k in @($script:Tidied.Keys)) { if (-not $live.ContainsKey($k)) { $script:Tidied.Remove($k) } }
     $script:PrevAt = $now
 
-    $actors = @($rows | Where-Object { $_.Role -like 'actor*' }).Count
-    $running = @($rows | Where-Object { $_.Role -eq 'daemon' }).Count -gt 0
-    $head = 'training: '
-    if ($running) { $head += 'running' } else { $head += 'stopped' }
-    $head += ('   power: ' + (Get-Power) + '   game servers: ' + $actors)
+    # Every slot, named, with what it is running. A single "training: running"
+    # is what made a stopped main slot look like stop had failed, when it was
+    # the wind-up supervisor still alive.
+    $parts = @()
+    foreach ($sl in (Get-RealSlots)) {
+        $sup = @($rows | Where-Object { $_.Role -eq 'daemon' -and $_.SlotName -eq $sl }).Count
+        $act = @($rows | Where-Object { $_.Role -like 'actor*' -and $_.SlotName -eq $sl }).Count
+        if ($sup -gt 0) { $parts += ("{0}: running, {1} server(s)" -f $sl, $act) }
+        elseif ($act -gt 0) { $parts += ("{0}: STOPPING, {1} server(s) left" -f $sl, $act) }
+        else { $parts += ("{0}: stopped" -f $sl) }
+    }
+    $head = ($parts -join '    ')
+    $head += ('    power: ' + (Get-Power))
     $pg = Get-Progress
     if ($pg) {
         if ($pg.Rate -lt 0) {
@@ -457,7 +502,12 @@ foreach ($sl in (Get-Slots)) {
     [void]$logPick.Items.Add("learner_$sl.err.log")
 }
 
+# Guarded: assigning the initial value fires the change handler, which with
+# "all" selected would write this level into every slot's power file and
+# quietly override what each slot was started with.
+$script:SlotSwitching = $true
 $cmbPow.SelectedItem = (Get-Power)
+$script:SlotSwitching = $false
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 2000

@@ -31,8 +31,15 @@ The lower half tails the logs. The drop-down selects which.
 
 A slot is an independent training run: its own weights, batches, checkpoint, log
 and power level. `main` trains the bot to run the map; `windup` trains the
-opening. The slot drop-down picks which one **start**, **stop** and the power
-level apply to, and the list shows every process with the slot it belongs to.
+opening.
+
+The slot drop-down picks what **start**, **stop** and the power level apply to.
+It defaults to **all**, which covers every slot - stopping one slot while another
+supervisor is still alive looks exactly like stop not working, because that
+supervisor restarts the game servers as fast as they are killed.
+
+The status line names each slot and says what it is running, so there is no one
+word that hides a slot still going.
 
 A new slot is a file: drop its daemon arguments in `data/daemon_args_<name>.txt`
 and it appears in the drop-down.
