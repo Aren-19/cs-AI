@@ -19,3 +19,4 @@ data/.*_baseline_gen
 web/*/node_modules/
 web/offstyles-web/
 web/replay-viewer/
+data/best*.txt

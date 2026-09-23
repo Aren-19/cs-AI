@@ -23,6 +23,59 @@ int   g_iTrackCount  = 0;
 float g_fTrackLength = 0.0;
 int   g_iTrackHint   = -1;       // last nearest index, for incremental search
 
+// shavit's start zone, from data/csai/<map>_zone.txt: "start x0 y0 z0 x1 y1 z1".
+// Walking out of it starts the timer the same as jumping does.
+float g_fZoneMin[3];
+float g_fZoneMax[3];
+bool  g_bZoneLoaded = false;
+
+stock void Zone_Load()
+{
+	g_bZoneLoaded = false;
+
+	char map[PLATFORM_MAX_PATH];
+	GetCurrentMap(map, sizeof(map));
+	char path[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, path, sizeof(path), "data/csai/%s_zone.txt", map);
+
+	File f = OpenFile(path, "r");
+	if (f == null)
+	{
+		PrintToServer("[CsAI] no start zone for %s - the wind-up hands over on takeoff only", map);
+		return;
+	}
+	char line[256];
+	char parts[8][32];
+	while (!f.EndOfFile() && f.ReadLine(line, sizeof(line)))
+	{
+		TrimString(line);
+		if (ExplodeString(line, " ", parts, sizeof(parts), sizeof(parts[])) < 7 || !StrEqual(parts[0], "start"))
+			continue;
+		for (int k = 0; k < 3; k++)
+		{
+			float a = StringToFloat(parts[1 + k]);
+			float b = StringToFloat(parts[4 + k]);
+			g_fZoneMin[k] = (a < b) ? a : b;
+			g_fZoneMax[k] = (a < b) ? b : a;
+		}
+		g_bZoneLoaded = true;
+	}
+	delete f;
+	if (g_bZoneLoaded)
+		PrintToServer("[CsAI] start zone (%.0f %.0f %.0f) to (%.0f %.0f %.0f)",
+		              g_fZoneMin[0], g_fZoneMin[1], g_fZoneMin[2], g_fZoneMax[0], g_fZoneMax[1], g_fZoneMax[2]);
+}
+
+/** True while the player's hull still touches the start zone. */
+stock bool Zone_Contains(const float pos[3])
+{
+	if (!g_bZoneLoaded)
+		return true;
+	return pos[0] >= g_fZoneMin[0] - 16.0 && pos[0] <= g_fZoneMax[0] + 16.0
+	    && pos[1] >= g_fZoneMin[1] - 16.0 && pos[1] <= g_fZoneMax[1] + 16.0
+	    && pos[2] < g_fZoneMax[2] && pos[2] + 62.0 > g_fZoneMin[2];
+}
+
 stock void Track_Load()
 {
 	g_iTrackCount  = 0;

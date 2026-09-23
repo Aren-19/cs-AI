@@ -24,6 +24,21 @@ stock void Train_WeightsPath(char[] buf, int maxlen)
 		BuildPath(Path_SM, buf, maxlen, "data/csai/weights_%s.txt", g_sSlot);
 }
 
+/** The partner slot's policy: the wind-up for the main run, the main run for a wind-up. */
+stock void Train_LoadPartner()
+{
+	if (g_sPartner[0] == '\0')
+		return;
+	char path[PLATFORM_MAX_PATH];
+	if (StrEqual(g_sPartner, "main"))
+		BuildPath(Path_SM, path, sizeof(path), "data/csai/weights.txt");
+	else
+		BuildPath(Path_SM, path, sizeof(path), "data/csai/weights_%s.txt", g_sPartner);
+	int before = g_iPartnerGen;
+	if (Pol_Load(path, NET_PARTNER) && g_iPartnerGen != before)
+		PrintToServer("[CsAI] partner '%s' at generation %d", g_sPartner, g_iPartnerGen);
+}
+
 stock void Train_WriteDoneMarker()
 {
 	if (g_bBatchBroken)
@@ -114,6 +129,15 @@ stock void Train_Begin(int batches, bool sync, bool quitAfter)
 	PrintToServer("[CsAI] mixed starts: mix=%.2f window=%.2f..%.2f of %d states",
 	              g_fStateMix, g_fStateLo, g_fStateHi, g_iStateCount);
 
+	Train_LoadPartner();
+	if (g_iWindupTicks > 0 && !g_bPartnerLoaded)
+	{
+		PrintToServer("[CsAI] train: a wind-up needs the main policy to fly its run, and '%s' has no weights", g_sPartner);
+		g_bTraining = false;
+		if (g_bQuitAfter)
+			ServerCommand("quit");
+		return;
+	}
 	Ep_OpenBatch();
 	Ep_Begin();
 }
@@ -176,6 +200,7 @@ stock void Train_EndOfBatch()
 	}
 
 	g_fTrainStart = GetEngineTime();
+	Train_LoadPartner();
 	Ep_OpenBatch();
 	Ep_Begin();
 }
@@ -242,6 +267,7 @@ stock void Train_Poll()
 
 	if (Train_TryLoadNewWeights())
 	{
+		Train_LoadPartner();
 		g_bTrainWaiting = false;
 		g_fTrainStart = GetEngineTime();
 		Ep_OpenBatch();
@@ -292,7 +318,11 @@ stock void Eval_Begin(int runs)
 	g_fStateMix = 0.0;          // never start an eval run mid-map
 	g_iBatchTarget = runs + 1;  // never roll a batch mid-eval
 
+	Train_LoadPartner();
 	PrintToServer("[CsAI] eval: %d greedy runs from state 0, policy gen %d", runs, g_iPolicyGen);
+	if (g_iWindupTicks == 0)
+		PrintToServer("[CsAI] eval: opening with the %s wind-up",
+		              (g_bPartnerLoaded && g_bEvalLearned) ? "learned" : "recorded");
 	Ep_OpenBatch();
 	Rec_Start();
 	Ep_Begin();
@@ -304,7 +334,7 @@ stock void Eval_EpisodeDone()
 	float frac = (g_fTrackLength > 0.0) ? (g_fEpBestS / g_fTrackLength) : 0.0;
 	int ticks = g_iEpTick - g_iEpPreTicks;
 	float secs = float((ticks > 0) ? ticks : 0) * GetTickInterval();
-	bool finished = (g_iEpOutcome == EP_FINISHED);
+	bool finished = (g_iEpOutcomeRun == EP_FINISHED);
 
 	// Keep the fastest finish, or failing that the run that got furthest.
 	bool keep = finished ? (g_iEvalFinish == 0 || secs < g_fEvalBestTime)
@@ -328,7 +358,7 @@ stock void Eval_EpisodeDone()
 	}
 
 	char what[16];
-	switch (g_iEpOutcome)
+	switch (g_iEpOutcomeRun)
 	{
 		case EP_FINISHED: what = "FINISHED";
 		case EP_FELL:     what = "fell";

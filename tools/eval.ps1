@@ -9,9 +9,10 @@ param(
     [int]$TimeoutSec = 600,
     [int]$Scripted   = 0,
     [int]$Greedy     = 1,
-    [int]$PreLearn   = 0,
     [int]$Prestrafe  = 1,
-    [int]$Windup     = 0,       # >0 = wind-up episodes of this many ticks
+    [int]$Windup     = 0,       # >0 = evaluate the wind-up, up to this many ground ticks
+    [string]$Partner = '',      # slot whose policy runs alongside
+    [int]$Learned    = 1,       # main: open with the learned wind-up when there is one
     [int]$FrameSkip  = 2,       # must match training
     [double]$DevCost = 0.5,
     [double]$SwitchCost = 0.15
@@ -30,7 +31,7 @@ $a = @(
     '+csai_scripted', $Scripted,
     '+csai_prestrafe', $Prestrafe,
     '+csai_actor', '99',
-    '+csai_prelearn', $PreLearn,
+    '+csai_evallearned', $Learned,
     '+csai_windup', $Windup,
     '+csai_budget', $Budget,
     '+csai_deviation', $Deviation,
@@ -42,6 +43,7 @@ $a = @(
     '+csai_bench_delay', '8'
 )
 if ($Slot) { $a += @('+csai_slot', $Slot) }
+if ($Partner) { $a += @('+csai_partner', $Partner) }
 
 $mode = if ($Greedy -ne 0) { 'greedy' } else { 'sampled' }
 Write-Host "==> eval $Map ($name): $Runs $mode runs, frameskip $FrameSkip" -ForegroundColor Cyan

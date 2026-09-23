@@ -18,12 +18,14 @@ param(
     [double]$StateLo = 0.61,
     [double]$StateHi = 0.72,
     [double]$Gamma  = 0.997,
-    [int]$PreLearn = 0,            # trailing wind-up ticks the policy drives
-    [int]$Windup = 0,              # >0 = wind-up episodes of this many ticks
+    [int]$Windup = 0,              # >0 = this slot trains the wind-up, up to this many ground ticks
+    [string]$Partner = '',         # slot whose policy runs alongside: the wind-up for main, main for a wind-up
+    [double]$LearnedMix = 0.0,     # main: share of runs from the start opened by the learned wind-up
     [int]$StallSeconds = 240,      # no new generation for this long counts as a stall
     [int]$SilentSeconds = 600,     # a server quiet this long while others work is restarted
     [int]$EvalEvery = 40,          # generations between evaluations
     [int]$ReportEvery = 300,       # seconds between reports
+    [int]$Guard = 4,               # evals in a row clearly worse than the best before rolling back; 0 = off
     [switch]$Stop
 )
 
@@ -45,6 +47,10 @@ $MapFile   = Join-Path $DataDir 'map.txt'
 $Data      = Join-Path $GameRoot 'cstrike\addons\sourcemod\data\csai'
 $OutDir    = Join-Path $Data "out$Sfx"
 $Weights   = Join-Path $Data "weights$Sfx.txt"
+$EvalCkpt  = Join-Path $DataDir "eval_ckpt$Sfx.npz"
+$BestCkpt  = Join-Path $DataDir "ckpt_best$Sfx.npz"
+$BestFile  = Join-Path $DataDir "best$Sfx.txt"
+$EvalLog   = Join-Path $LogDir "eval_$Name.log"
 
 # Ports: 27015 + 10 per actor for main; other slots get their own block.
 $PortBase = 27015
@@ -165,11 +171,12 @@ function Start-Actor([string]$level, [int]$id) {
         '+csai_prestrafe', '1', '+csai_switchcost', $SwitchCost, '+csai_devcost', $DevCost,
         '+csai_timecost', $TimeCost, '+csai_trimcost', $TrimCost,
         '+csai_finishbonus', $FinishBonus, '+csai_finishfloor', $FinishFloor,
-        '+csai_prelearn', $PreLearn, '+csai_windup', $Windup,
+        '+csai_windup', $Windup, '+csai_learnedmix', $LearnedMix,
         '+csai_bench_timescale', $cfg.Timescale,
         '+csai_bench_quit', '0', '+csai_bench_delay', '8'
     )
     if ($Slot) { $a += @('+csai_slot', $Slot) }
+    if ($Partner) { $a += @('+csai_partner', $Partner) }
     $p = Start-Srcds "csai_${Name}_a$id" ($PortBase + 10 * $id) $a
     if (-not $p) { Write-Log "  actor $id did not start"; return -1 }
     Start-Sleep -Seconds 2
@@ -188,8 +195,11 @@ function Invoke-Report([switch]$Snapshot) {
 
 function Invoke-Eval {
     Write-Log '  evaluating the policy (writes a replay)'
-    $ea = @('-Runs', '8', '-Map', $Map, '-Greedy', '0', '-Port', $EvalPort,
+    # The checkpoint as it stands now, in case this eval turns out to be the best.
+    try { Copy-Item $Ckpt $EvalCkpt -Force -ErrorAction Stop } catch { Remove-Item $EvalCkpt -ErrorAction SilentlyContinue }
+    $ea = @('-Runs', '8', '-Map', $Map, '-Greedy', '1', '-Port', $EvalPort,
             '-FrameSkip', $FrameSkip, '-DevCost', $DevCost, '-Windup', $Windup,
+            '-Partner', $Partner,
             '-Timescale', '20', '-TimeoutSec', '600')
     if ($Slot) { $ea += @('-Slot', $Slot) }
     return (Start-HiddenPowerShell (Join-Path $Root 'tools\eval.ps1') $ea $Root)
@@ -257,9 +267,76 @@ $lastGen = Get-Gen
 $lastGenAt = Get-Date
 $stallWarned = $false
 $stallRestarts = 0
+$badEvals = 0
+$rolledBack = $false
 $lastEvalGen = $lastGen
 $lastReport = Get-Date
 $appliedLevel = $level
+
+# The last evaluation in the eval log: runs, finishes and the median finish time.
+function Read-EvalResult {
+    if (-not (Test-Path $EvalLog)) { return $null }
+    $block = @()
+    foreach ($l in (Get-Content $EvalLog -Tail 60)) {
+        if ($l -like '# *') { $block = @() } else { $block += $l }
+    }
+    $gen = 0
+    $times = @()
+    $runs = 0
+    foreach ($l in $block) {
+        if ($l -match 'policy gen (\d+)') { $gen = [int]$Matches[1] }
+        if ($l -match 'eval run \d+/\d+: (\S+) at [\d.]+% in ([\d.]+)s') {
+            $runs++
+            if ($Matches[1] -eq 'FINISHED') { $times += [double]$Matches[2] }
+        }
+    }
+    if ($runs -eq 0) { return $null }
+    $med = 999.0
+    if ($times.Count) {
+        $st = @($times | Sort-Object)
+        $med = ($st[[int][math]::Floor(($st.Count - 1) / 2)] + $st[[int][math]::Ceiling(($st.Count - 1) / 2)]) / 2
+    }
+    return [pscustomobject]@{ Gen = $gen; Runs = $runs; Finished = $times.Count; Median = $med }
+}
+
+function Read-Best {
+    if (-not (Test-Path $BestFile)) { return $null }
+    $f = (Get-Content $BestFile -Raw).Trim() -split '\s+'
+    if ($f.Count -lt 4) { return $null }
+    return [pscustomobject]@{ Gen = [int]$f[0]; Finished = [int]$f[1]; Runs = [int]$f[2]; Median = [double]$f[3] }
+}
+
+# Keeps the best checkpoint by evaluation, and rolls back once if training falls
+# clearly behind it for several evaluations in a row.
+function Update-Best {
+    $r = Read-EvalResult
+    if (-not $r) { return }
+    $b = Read-Best
+    $line = "{0} {1} {2} {3:F3}" -f $r.Gen, $r.Finished, $r.Runs, $r.Median
+    Write-Log ("  eval gen {0}: {1}/{2} finished, median {3}" -f $r.Gen, $r.Finished, $r.Runs,
+               $(if ($r.Finished) { '{0:N2}s' -f $r.Median } else { '-' }))
+    $better = (-not $b) -or ($r.Finished -gt $b.Finished) -or
+              ($r.Finished -eq $b.Finished -and $r.Median -lt $b.Median - 0.001)
+    if ($better -and (Test-Path $EvalCkpt)) {
+        Copy-Item $EvalCkpt $BestCkpt -Force
+        Set-Content -Path $BestFile -Value $line -Encoding ascii
+        Write-Log '  new best - checkpoint kept'
+        $script:badEvals = 0
+        return
+    }
+    $worse = $b -and (($r.Finished -le $b.Finished - 2) -or ($r.Finished -gt 0 -and $b.Finished -gt 0 -and $r.Median -gt $b.Median + 0.25))
+    $script:badEvals = if ($worse) { $script:badEvals + 1 } else { 0 }
+    if ($Guard -gt 0 -and $script:badEvals -ge $Guard -and -not $script:rolledBack -and (Test-Path $BestCkpt)) {
+        Write-Log "  $($script:badEvals) evals in a row clearly behind the best (gen $($b.Gen)) - rolling back to it"
+        foreach ($p in (Get-MyLearners)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Seconds 2
+        $rp = Start-Hidden 'python.exe' @((Join-Path $Root 'tools\restore.py'), $BestCkpt, $Ckpt) $Root
+        if ($rp) { [void]$rp.WaitForExit(60000) }
+        Start-Learner
+        $script:rolledBack = $true
+        $script:badEvals = 0
+    }
+}
 
 function Restart-Actor([int]$i) {
     if ($ActorPids.ContainsKey($i) -and $ActorPids[$i] -gt 0) {
@@ -276,6 +353,7 @@ while ($true) {
 
     if ($evalProc -and $evalProc.HasExited) {
         Write-Log ("  eval finished in {0:N0}s" -f ((Get-Date) - $evalStartedAt).TotalSeconds)
+        Update-Best
         Invoke-Report
         $evalProc = $null
     }

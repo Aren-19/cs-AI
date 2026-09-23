@@ -16,15 +16,22 @@
 #define POL_W3_N  (POL_H2 * POL_ACTIONS)
 #define POL_TOTAL (POL_W1_N + POL_H1 + POL_W2_N + POL_H2 + POL_W3_N + POL_ACTIONS)
 
-float g_fW1[POL_W1_N];
-float g_fB1[POL_H1];
-float g_fW2[POL_W2_N];
-float g_fB2[POL_H2];
-float g_fW3[POL_W3_N];
-float g_fB3[POL_ACTIONS];
+// Net 0 is the policy this server trains. Net 1 is the partner slot's policy,
+// run frozen: the wind-up for the main run, or the main run after a wind-up.
+#define NET_SELF     0
+#define NET_PARTNER  1
+
+float g_fW1[2][POL_W1_N];
+float g_fB1[2][POL_H1];
+float g_fW2[2][POL_W2_N];
+float g_fB2[2][POL_H2];
+float g_fW3[2][POL_W3_N];
+float g_fB3[2][POL_ACTIONS];
 
 bool  g_bPolicyLoaded = false;
 int   g_iPolicyGen    = -1;      // generation counter from the weights file
+bool  g_bPartnerLoaded = false;
+int   g_iPartnerGen    = -1;
 
 // xorshift32: a native RNG call per tick is avoidable overhead, and a local
 // generator keeps sampling reproducible from a seed.
@@ -48,19 +55,19 @@ stock void Pol_Seed(int seed)
 /** Small random init, so the harness runs before any training has happened. */
 stock void Pol_RandomInit()
 {
-	for (int i = 0; i < POL_W1_N; i++) g_fW1[i] = (Pol_Rand() - 0.5) * 0.5;
-	for (int i = 0; i < POL_H1;   i++) g_fB1[i] = 0.0;
-	for (int i = 0; i < POL_W2_N; i++) g_fW2[i] = (Pol_Rand() - 0.5) * 0.5;
-	for (int i = 0; i < POL_H2;   i++) g_fB2[i] = 0.0;
-	for (int i = 0; i < POL_W3_N; i++) g_fW3[i] = (Pol_Rand() - 0.5) * 0.02;
-	for (int i = 0; i < POL_ACTIONS; i++) g_fB3[i] = 0.0;
+	for (int i = 0; i < POL_W1_N; i++) g_fW1[0][i] = (Pol_Rand() - 0.5) * 0.5;
+	for (int i = 0; i < POL_H1;   i++) g_fB1[0][i] = 0.0;
+	for (int i = 0; i < POL_W2_N; i++) g_fW2[0][i] = (Pol_Rand() - 0.5) * 0.5;
+	for (int i = 0; i < POL_H2;   i++) g_fB2[0][i] = 0.0;
+	for (int i = 0; i < POL_W3_N; i++) g_fW3[0][i] = (Pol_Rand() - 0.5) * 0.02;
+	for (int i = 0; i < POL_ACTIONS; i++) g_fB3[0][i] = 0.0;
 	g_bPolicyLoaded = true;
 	g_iPolicyGen = 0;
 }
 
 static float s_fLoadBuf[POL_TOTAL];   // parsed here, committed only if complete
 
-stock bool Pol_Load(const char[] path)
+stock bool Pol_Load(const char[] path, int net = NET_SELF)
 {
 	if (!FileExists(path))
 		return false;
@@ -119,43 +126,51 @@ stock bool Pol_Load(const char[] path)
 	for (int i = 0; i < POL_TOTAL; i++)
 	{
 		int k = i;
-		if (k < POL_W1_N)                          { g_fW1[k] = s_fLoadBuf[i]; continue; }
+		if (k < POL_W1_N)                          { g_fW1[net][k] = s_fLoadBuf[i]; continue; }
 		k -= POL_W1_N;
-		if (k < POL_H1)                            { g_fB1[k] = s_fLoadBuf[i]; continue; }
+		if (k < POL_H1)                            { g_fB1[net][k] = s_fLoadBuf[i]; continue; }
 		k -= POL_H1;
-		if (k < POL_W2_N)                          { g_fW2[k] = s_fLoadBuf[i]; continue; }
+		if (k < POL_W2_N)                          { g_fW2[net][k] = s_fLoadBuf[i]; continue; }
 		k -= POL_W2_N;
-		if (k < POL_H2)                            { g_fB2[k] = s_fLoadBuf[i]; continue; }
+		if (k < POL_H2)                            { g_fB2[net][k] = s_fLoadBuf[i]; continue; }
 		k -= POL_H2;
-		if (k < POL_W3_N)                          { g_fW3[k] = s_fLoadBuf[i]; continue; }
+		if (k < POL_W3_N)                          { g_fW3[net][k] = s_fLoadBuf[i]; continue; }
 		k -= POL_W3_N;
-		if (k < POL_ACTIONS)                       { g_fB3[k] = s_fLoadBuf[i]; }
+		if (k < POL_ACTIONS)                       { g_fB3[net][k] = s_fLoadBuf[i]; }
 	}
 
-	g_bPolicyLoaded = true;
-	g_iPolicyGen = gen;
+	if (net == NET_SELF)
+	{
+		g_bPolicyLoaded = true;
+		g_iPolicyGen = gen;
+	}
+	else
+	{
+		g_bPartnerLoaded = true;
+		g_iPartnerGen = gen;
+	}
 	return true;
 }
 
-stock int Pol_Act(const float obs[OBS_DIM], float &outLogp, bool greedy)
+stock int Pol_Act(const float obs[OBS_DIM], float &outLogp, bool greedy, int net = NET_SELF)
 {
 	float h1[POL_H1];
 	for (int j = 0; j < POL_H1; j++)
 	{
-		float a = g_fB1[j];
+		float a = g_fB1[net][j];
 		int base = j * OBS_DIM;
 		for (int i = 0; i < OBS_DIM; i++)
-			a += g_fW1[base + i] * obs[i];
+			a += g_fW1[net][base + i] * obs[i];
 		h1[j] = (a > 0.0) ? a : 0.0;
 	}
 
 	float h2[POL_H2];
 	for (int j = 0; j < POL_H2; j++)
 	{
-		float a = g_fB2[j];
+		float a = g_fB2[net][j];
 		int base = j * POL_H1;
 		for (int i = 0; i < POL_H1; i++)
-			a += g_fW2[base + i] * h1[i];
+			a += g_fW2[net][base + i] * h1[i];
 		h2[j] = (a > 0.0) ? a : 0.0;
 	}
 
@@ -163,10 +178,10 @@ stock int Pol_Act(const float obs[OBS_DIM], float &outLogp, bool greedy)
 	float maxl = -1.0e30;
 	for (int j = 0; j < POL_ACTIONS; j++)
 	{
-		float a = g_fB3[j];
+		float a = g_fB3[net][j];
 		int base = j * POL_H2;
 		for (int i = 0; i < POL_H2; i++)
-			a += g_fW3[base + i] * h2[i];
+			a += g_fW3[net][base + i] * h2[i];
 		logits[j] = a;
 		if (a > maxl)
 			maxl = a;

@@ -13,6 +13,7 @@ CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 REPLAYBOT = os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot")
 MAPS = os.path.join(CSTRIKE, "maps")
+SHAVIT_DB = os.path.join(CSTRIKE, r"addons\sourcemod\data\sqlite\shavit-local.sq3")
 
 ARTEFACTS = ("track", "states", "prestrafe", "demo")
 
@@ -30,6 +31,27 @@ def find_replay(map_name, given):
 
 def paths(map_name):
     return {a: os.path.join(DATA, "%s_%s.txt" % (map_name, a)) for a in ARTEFACTS}
+
+def write_zone(map_name):
+    """Copy shavit's start zone (main track) to <map>_zone.txt for the plugin."""
+    import sqlite3
+    if not os.path.isfile(SHAVIT_DB):
+        return None
+    try:
+        db = sqlite3.connect("file:%s?mode=ro" % SHAVIT_DB.replace("\\", "/"), uri=True)
+        row = db.execute("SELECT corner1_x, corner1_y, corner1_z, corner2_x, corner2_y, corner2_z "
+                         "FROM mapzones WHERE map = ? AND type = 0 AND track = 0 LIMIT 1",
+                         (map_name,)).fetchone()
+        db.close()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    path = os.path.join(DATA, "%s_zone.txt" % map_name)
+    with open(path, "w", encoding="ascii") as fh:
+        fh.write("# shavit start zone, main track\n")
+        fh.write("start %s\n" % " ".join("%.3f" % v for v in row))
+    return path
 
 def header_value(path, key, cast=float):
     try:
@@ -154,6 +176,10 @@ def check(map_name):
         else:
             rows.append((label, "stays within %.0f units of the track" % worst, False))
 
+    zone = os.path.join(DATA, "%s_zone.txt" % map_name)
+    rows.append(("start zone", "present" if os.path.isfile(zone) else
+                 "missing - the wind-up hands over on takeoff only", False))
+
     bsp = os.path.join(MAPS, "%s.bsp" % map_name)
     rows.append(("map file", "present" if os.path.isfile(bsp) else "NOT INSTALLED",
                  not os.path.isfile(bsp)))
@@ -179,6 +205,8 @@ def main():
     args = ap.parse_args()
 
     print("== %s ==" % args.map)
+    if write_zone(args.map):
+        print("  start zone copied from the timer's database")
     if args.check:
         ok = report(args.map)
         print()

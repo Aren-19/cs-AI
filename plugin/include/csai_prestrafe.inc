@@ -20,9 +20,6 @@ float g_fPreStart[3];
 float g_fPreStartAng[3];
 int   g_iPreCount   = 0;
 
-// Trailing ticks of the wind-up the policy drives. Measured worse above 16.
-int   g_iPreLearned = 0;
-
 bool  g_bPrestrafeEnabled = true;
 bool  g_bPreActive  = false;     // currently replaying
 int   g_iPreIndex   = 0;

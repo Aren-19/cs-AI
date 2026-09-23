@@ -16,7 +16,8 @@ part of this should be pointed at a public server.
 
 Map: surf_demise. Reference run: 39.04 seconds, set by hand.
 
-The bot finishes the map. Eight runs from the start, one per recorded opening:
+The bot finishes the map. Eight runs from the start, opened with recorded wind-ups
+(the bot's own wind-up is still training, see below):
 
 | | bot | reference |
 |---|---|---|
@@ -74,13 +75,23 @@ rest. Measured on 12 logical cores:
 
 Each attempt is one run of the whole map.
 
-1. The recorded opening is replayed first. Building speed before the timer starts
-   is a separate skill, trained on its own in the `windup` slot: wind up on the
-   ground, jump inside the start zone, and strafe down onto the first ramp at
-   human turning speeds.
-2. The bot takes over and surfs the rest.
+1. The bot winds up from standing. It holds forward and one strafe key at a time,
+   turns its view no faster than a person does, and jumps when it chooses. The
+   timer starts on that tick, the same way the timer plugin starts it.
+2. From the jump, the surfing policy takes over and flies the rest of the map,
+   strafing down onto the first ramp and on to the end.
 3. It scores on distance along the route, and on time if it reaches the end. That
    score feeds back into how it steers.
+
+The wind-up and the run are two policies trained side by side, in the `windup`
+and `main` slots. The wind-up is scored on the finish time of the whole run the
+surfing policy flies from its jump, so it learns the wind-up that sets up the
+fastest run rather than one that merely looks fast. The surfing policy starts
+three runs in four from the bot's own wind-up and the rest from recorded ones.
+
+Every few minutes each slot is scored on eight runs. The best checkpoint so far
+is kept, and if training falls clearly behind it for several scorings in a row
+the slot rolls back to it once.
 
 In surf the only thing that matters is the angle between the held keys and the
 current direction of travel. That angle is the single decision the bot makes, a

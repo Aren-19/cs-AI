@@ -169,6 +169,7 @@ public void OnMapStart()
         g_hPollTimer = CreateTimer(0.25, Timer_TrainPoll, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
     Track_Load();
+    Zone_Load();
     LoadStates();
 
     Pre_Load();          // single-file fallback, if no recordings exist
@@ -223,12 +224,14 @@ void ArmBenchmark()
     g_fFinishBonus    = GetCommandLineParamFloat("+csai_finishbonus", g_fFinishBonus);
     g_fFinishFloor    = GetCommandLineParamFloat("+csai_finishfloor", g_fFinishFloor);
     g_fTimePower      = GetCommandLineParamFloat("+csai_timepower", g_fTimePower);
-    g_iPreLearned     = GetCommandLineParamInt("+csai_prelearn", g_iPreLearned);
     GetCommandLineParam("+csai_slot", g_sSlot, sizeof(g_sSlot), "");
+    GetCommandLineParam("+csai_partner", g_sPartner, sizeof(g_sPartner), "");
+    g_fLearnedMix     = GetCommandLineParamFloat("+csai_learnedmix", g_fLearnedMix);
+    g_bEvalLearned    = (GetCommandLineParamInt("+csai_evallearned", 1) != 0);
+    g_iWindupMax      = GetCommandLineParamInt("+csai_windupmax", g_iWindupMax);
     g_iWindupTicks    = GetCommandLineParamInt("+csai_windup", g_iWindupTicks);
     g_fWindupYawCap   = GetCommandLineParamFloat("+csai_windupyaw", g_fWindupYawCap);
     g_iWindupHold     = GetCommandLineParamInt("+csai_winduphold", g_iWindupHold);
-    g_fWindupPosCost  = GetCommandLineParamFloat("+csai_winduppos", g_fWindupPosCost);
     g_fTrimCost       = GetCommandLineParamFloat("+csai_trimcost", g_fTrimCost);
     g_fDeviationCost  = GetCommandLineParamFloat("+csai_devcost", g_fDeviationCost);
     g_iPitchMode      = GetCommandLineParamInt("+csai_pitch", g_iPitchMode);
@@ -249,11 +252,11 @@ void ArmBenchmark()
     PrintToServer("[CsAI] reward: timecost %.3f per decision, devcost %.2f, switchcost %.2f, trimcost %.2f",
                   g_fTimeCost, g_fDeviationCost, g_fSwitchCost, g_fTrimCost);
     if (g_iWindupTicks > 0)
-        PrintToServer("[CsAI] wind-up training: %d tick episodes, view capped at %.1f deg/tick, side held %d ticks",
-                      g_iWindupTicks, g_fWindupYawCap, g_iWindupHold);
+        PrintToServer("[CsAI] wind-up training: up to %d ground ticks, view capped at %.1f deg/tick, key held %d ticks, run flown by '%s'",
+                      g_iWindupMax, g_fWindupYawCap, g_iWindupHold, g_sPartner);
     else
-        PrintToServer("[CsAI] wind-up: the policy drives the last %d tick(s) of it (0 = replay the recording whole)",
-                      g_iPreLearned);
+        PrintToServer("[CsAI] opening: learned wind-up from '%s' on %.0f%% of runs, recorded on the rest",
+                      g_sPartner, g_fLearnedMix * 100.0);
 
     char cmdline[512];
     GetCommandLine(cmdline, sizeof(cmdline));
@@ -965,7 +968,7 @@ public Action Cmd_Cfg(int args)
     else if (StrEqual(key, "finishbonus")) g_fFinishBonus = StringToFloat(val);
     else if (StrEqual(key, "finishfloor")) g_fFinishFloor = StringToFloat(val);
     else if (StrEqual(key, "timepower"))  g_fTimePower   = StringToFloat(val);
-    else if (StrEqual(key, "prelearn"))   g_iPreLearned  = StringToInt(val);
+    else if (StrEqual(key, "learnedmix")) g_fLearnedMix  = StringToFloat(val);
     else if (StrEqual(key, "windup"))     g_iWindupTicks = StringToInt(val);
     else if (StrEqual(key, "windupyaw"))  g_fWindupYawCap = StringToFloat(val);
     else if (StrEqual(key, "winduphold")) g_iWindupHold  = StringToInt(val);

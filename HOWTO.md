@@ -7,7 +7,7 @@ ever appears on screen.
 
 ```
   main: running, 6 server(s)   power high   gen 14754   finishing 100%   median 39.48s
-  windup: running, 2 server(s)   power low   gen 3120   mean return 880
+  windup: running, 2 server(s)   power low   gen 3120   mean score 4.1   best 8/8 at 39.30s
 
    what         slot     pid     cpu    memory   doing
    supervisor   main     15132   1%     93 MB    keeps the slot running
@@ -94,13 +94,20 @@ evaluation, or the furthest run if none finished.
 
 Each episode is one continuous attempt at the whole map.
 
-1. **Prestrafe** - in the main slot the recorded pre-timer inputs are replayed
-   through real physics. The windup slot learns this part on its own: it winds up
-   on the ground, jumps inside the start zone, and strafes left and right down onto
-   the first ramp, with its turning speed and key changes held to human limits.
-2. **Handover** - the policy takes over at about 285 u/s. Nothing before this
-   point is trained on; the progress baseline starts here.
+1. **Wind-up** - the bot stands at the start and winds up on the ground with the
+   `windup` policy: forward held, one strafe key at a time held for at least 12
+   ticks, view turning no faster than 3.5 degrees a tick. Ground time is free,
+   as it is on the timer.
+2. **Takeoff** - when the wind-up chooses to jump, or leaves the ground or the
+   start zone, the `main` policy takes over on that tick and the clock starts.
+   The start zone comes from the timer's database (`setup_map.py` copies it).
 3. **The run** - the bot surfs until it finishes, falls, or stops advancing.
+
+The `main` slot opens three runs in four with the learned wind-up and the rest
+with a recorded one (`-LearnedMix`). The `windup` slot trains the wind-up: each of
+its episodes is a whole run, with `main` flying everything after the jump, and
+the only score is how that run ends, 20 points per second against the reference
+time. Evaluations and replays always use the learned wind-up.
 
 Jump is held throughout. With `sv_enablebunnyhopping 1` that means clipping a
 ramp auto-hops instead of sticking and dumping momentum.
@@ -230,6 +237,8 @@ which finish time alone does not.
   crashes and restarts.
 - `logs/learner.log`, `logs/learner_<slot>.log` - the learner's output.
 - `logs/eval_<slot>.log` - every evaluation.
+- `data/best.txt`, `data/best_<slot>.txt` and `data/ckpt_best*.npz` - the best
+  evaluation so far and the checkpoint that made it.
 - `cstrike/logs/csai_<slot>_a<N>.log` - each game server's console.
 - `data/train_log.csv` - one row per generation.
 - `docs/experiments.md` - each configuration change and whether it worked.

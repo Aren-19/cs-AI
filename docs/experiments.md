@@ -264,6 +264,39 @@ fall and stuck checks run on the state before the next input is applied. Reporte
 times are one tick (0.015 s) shorter as a result; the table above was measured
 this way.
 
+## The bot's own wind-up
+
+The wind-up slot used to be scored on horizontal speed at first ramp contact. The
+contact test (vertical acceleration no longer equal to gravity) misses steep
+ramps, so the policy learned to slide down a ramp somewhere else: about 1000 u/s,
+400 units off the line, 250 ticks in. The recording reaches the ramp at 466 u/s.
+And the main run never used it; every run still opened with a recording.
+
+The recordings settle when the clock starts: shavit starts it on the last tick on
+the ground before the jump (tick 67, jump on 68), well inside the start zone.
+Ground time is free.
+
+Now the wind-up drives from standing until it chooses to jump or leaves the
+ground or the start zone, and the main policy takes over on that tick with the
+clock starting. The wind-up slot scores each wind-up on the finish time of the
+whole run the main policy then flies, 20 points per second against the
+reference. The main slot opens three runs in four with the learned wind-up, so it
+learns to fly from the bot's own takeoffs.
+
+First evaluation, greedy, eight spawn points, before any co-training:
+
+| wind-up | ground ticks | takeoff | run |
+|---|---|---|---|
+| learned | 54 | 282 u/s | 39.34 s |
+| learned | 56 | 279 u/s | 39.31 s |
+| learned | 36 | 269 u/s | fell at 7% |
+| learned | 36 | 270 u/s | fell at 7% |
+
+A wind-up that holds the ground long enough already matches the best run on a
+recorded one. After 20 generations of co-training, 7 of 8 wind-up runs finish;
+the short 34 to 40 tick wind-ups are the slow and failing ones, which is what the
+score now teaches away from.
+
 ## Where it stands
 
 | | bot | reference |

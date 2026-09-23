@@ -18,6 +18,7 @@
 // second experiment can train at the same time without either seeing the
 // other's data.
 char  g_sSlot[64] = "";
+char  g_sPartner[64] = "";      // slot whose policy runs as the partner net; "main" = weights.txt
 
 bool  g_bTraining      = false;
 bool  g_bEval          = false;
@@ -45,7 +46,6 @@ float g_fStateMix      = 0.0;      // share of episodes starting mid-map
 float g_fStateLo       = 0.61;     // window to sample those from, as track fraction
 float g_fStateHi       = 0.72;
 
-int   g_iEpOutcome     = EP_RUNNING;
 int   g_iEpTick        = 0;
 int   g_iEpSteps       = 0;
 bool  g_bEpCoast       = false;   // this decision presses no strafe key
@@ -85,27 +85,28 @@ float g_fEpPendProbe[PROBE_DIM];
 float g_fEpPendWish = 90.0;
 float g_fEpWishAngle = 90.0;   // = side * (90 + trim)
 
-bool  g_bEpGround   = false;
+bool  g_bEpGround   = false;   // wind-up slot: the policy being trained is on the ground
 int   g_iEpPreTicks = 0;
 
-// Wind-up episodes: the bot builds its own ground speed instead of replaying a
-// recording. Scored on the state it hands over, one second away, rather than on
-// a finish forty seconds away.
-int   g_iWindupTicks   = 0;      // 0 = off; otherwise the length of a wind-up episode
+// Wind-up: the bot builds its own speed from standing, then jumps. The view
+// turns at a capped rate and a strafe key is held a minimum time, as a person
+// does it: the recorded wind-ups move the view 0.53 deg/tick median, 3.06 at
+// most, and hold a key 16 to 41 ticks.
+int   g_iWindupTicks   = 0;      // >0 = this slot trains the wind-up
+int   g_iWindupMax     = 400;    // ground ticks before takeoff is forced
 float g_fWindupYawCap  = 3.5;    // degrees of view movement per tick
-int   g_iWindupHold    = 12;     // ticks a strafe direction must be held
-float g_fWindupPosCost = 0.05;   // per unit off the line at ramp contact
+int   g_iWindupHold    = 12;     // ticks a strafe key must be held
+float g_fLearnedMix    = 0.0;    // main slot: share of runs opened by the learned wind-up
+bool  g_bEvalLearned   = true;   // evals open with the learned wind-up when there is one
 
-// Measured on the recorded wind-up: the view moves 0.53 deg/tick median and
-// 3.06 at its fastest, and a strafe direction is held 16 to 41 ticks. The caps
-// sit just outside that, so the bot can do what a person does and cannot
-// tick-switch its way to a score that no human could reproduce.
 float g_fWindupYaw     = 0.0;    // the view angle being steered, integrated
 int   g_iWindupHeld    = 0;      // ticks the current side has been held
 int   g_iWindupSide    = 1;
-float g_fWindupPrevVz  = 0.0;
-bool  g_bWindupFlew    = false;   // has left the ground at least once
-ConVar g_cvGravity     = null;
+bool  g_bEpLearnedOpen = false;  // main slot: the learned wind-up is driving
+bool  g_bEpFollow      = false;  // wind-up slot: the main policy is flying the run
+int   g_iEpClockTick   = 0;      // tick the timer started on
+float g_fEpTakeoffSpeed = 0.0;
+int   g_iEpOutcomeRun  = EP_RUNNING;   // how the run itself ended
 int   g_iEpSide = 1;           // strafe side of the decision in flight
 int   g_iEpTrim = 0;
 
@@ -260,60 +261,46 @@ stock void Ep_PushStep()
 	g_fEpReturn += g_fEpStepReward;
 }
 
+/** Ground wind-up controls: forward held, a strafe key held a minimum time, and a view that turns at a capped rate. */
+stock void Ep_ApplyGround(int &buttons, float movement[3], float angles[3])
+{
+	if (g_iEpSide != g_iWindupSide && g_iWindupHeld >= g_iWindupHold)
+	{
+		g_iWindupSide = g_iEpSide;
+		g_iWindupHeld = 0;
+	}
+	g_iWindupHeld++;
+	bool useLeft = (g_iWindupSide < 0);
+
+	// Trim picks a turn rate, not an angle: a person sweeps the mouse.
+	static const float kWindupTurn[POL_TRIMS] =
+		{ -3.0, -1.5, -0.75, -0.25, 0.25, 0.75, 1.5, 3.0 };
+	int ti = g_iEpTrim;
+	if (ti < 0) ti = 0;
+	if (ti >= POL_TRIMS) ti = POL_TRIMS - 1;
+	float turn = kWindupTurn[ti];
+	if (turn >  g_fWindupYawCap) turn =  g_fWindupYawCap;
+	if (turn < -g_fWindupYawCap) turn = -g_fWindupYawCap;
+
+	g_fWindupYaw += turn;
+	while (g_fWindupYaw >  180.0) g_fWindupYaw -= 360.0;
+	while (g_fWindupYaw < -180.0) g_fWindupYaw += 360.0;
+
+	angles[0] = 0.0;
+	angles[1] = g_fWindupYaw;
+	angles[2] = 0.0;
+	movement[0] = 450.0;
+	movement[1] = useLeft ? -450.0 : 450.0;
+	movement[2] = 0.0;
+	buttons = (useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_FORWARD;
+}
+
 stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], float angles[3])
 {
 	float speed  = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
 	float velYaw = (speed > 1.0) ? RadToDeg(ArcTangent2(vel[1], vel[0])) : angles[1];
 
 	bool useLeft = (g_fEpWishAngle > 0.0);
-
-	if (g_bEpGround)
-	{
-		// Strafe key, with a floor on how long it must be held. The recorded
-		// wind-up holds a direction for 16 to 41 ticks; without this the policy
-		// can alternate every decision, which scores well and is not surfing.
-		if (g_iEpSide != g_iWindupSide && g_iWindupHeld >= g_iWindupHold)
-		{
-			g_iWindupSide = g_iEpSide;
-			g_iWindupHeld = 0;
-		}
-		g_iWindupHeld++;
-		useLeft = (g_iWindupSide < 0);
-
-		// Coast means jump here. Leaving the ledge is a decision a person makes,
-		// and it is the one action the ground phase needs that steering cannot
-		// express, so the otherwise unused action carries it.
-		bool wantJump = g_bEpCoast;
-
-		// Trim picks a turn RATE, not an angle, and the view integrates it. A
-		// person sweeps the mouse; they do not teleport it. Symmetric and dense
-		// near zero, spanning the 0.53 deg/tick median and 3.06 peak measured on
-		// the recorded wind-up.
-		static const float kWindupTurn[POL_TRIMS] =
-			{ -3.0, -1.5, -0.75, -0.25, 0.25, 0.75, 1.5, 3.0 };
-		int ti = g_iEpTrim;
-		if (ti < 0) ti = 0;
-		if (ti >= POL_TRIMS) ti = POL_TRIMS - 1;
-		float turn = kWindupTurn[ti];
-		if (turn >  g_fWindupYawCap) turn =  g_fWindupYawCap;
-		if (turn < -g_fWindupYawCap) turn = -g_fWindupYawCap;
-
-		g_fWindupYaw += turn;
-		while (g_fWindupYaw >  180.0) g_fWindupYaw -= 360.0;
-		while (g_fWindupYaw < -180.0) g_fWindupYaw += 360.0;
-
-		angles[0] = 0.0;
-		angles[1] = g_fWindupYaw;
-		angles[2] = 0.0;
-		movement[0] = 450.0;
-		movement[1] = useLeft ? -450.0 : 450.0;
-		movement[2] = 0.0;
-		// Jump only when the policy coasts.
-		buttons = (useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_FORWARD;
-		if (wantJump)
-			buttons |= IN_JUMP;
-		return;
-	}
 
 	float viewYaw = velYaw + g_fEpWishAngle + (useLeft ? -90.0 : 90.0);
 	while (viewYaw >  180.0) viewYaw -= 360.0;
@@ -351,41 +338,39 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 	buttons = g_bEpCoast ? IN_JUMP : ((useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_JUMP);
 }
 
+/** Terminal reward for a wind-up: how the whole run it led into went. */
+stock float Ep_WindupScore(int outcome)
+{
+	if (!g_bEpFollow)
+		return -30.0;                        // never took off
+
+	float secs = float(g_iEpTick - g_iEpClockTick) * GetTickInterval();
+	if (outcome == EP_FINISHED && g_fRefTime > 0.0)
+	{
+		// 20 per second against the reference, so a tenth of a second is worth 2.
+		float score = 20.0 * (g_fRefTime - secs) + 10.0;
+		return (score < -10.0) ? -10.0 : score;
+	}
+	float frac = (g_fTrackLength > 0.0) ? (g_fEpBestS - g_fEpStartS) / g_fTrackLength : 0.0;
+	return -20.0 + 10.0 * frac;
+}
+
 stock void Ep_Finish(int outcome)
 {
-	g_iEpOutcome = outcome;
-
 	// terminal reward folded into the last recorded step
 	float terminal = 0.0;
-	if (outcome == EP_WINDUP)
+	g_iEpOutcomeRun = outcome;
+	if (g_iWindupTicks > 0)
 	{
-		// Scored on the state handed over, not on a finish forty seconds later.
-		// Speed is only worth anything in the direction the run leaves in, and
-		// only from the place it leaves from, so both are priced here.
-		float pos[3], vel[3];
-		GetClientAbsOrigin(g_iBot, pos);
-		GetEntPropVector(g_iBot, Prop_Data, "m_vecVelocity", vel);
-
-		// Speed carried onto the ramp is the whole point: the recorded sequence
-		// reaches 282 u/s on the ground and 466 by the time it lands. Being fast
-		// somewhere off the route is worth nothing, so distance from the line is
-		// priced too.
-		float along = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
-
-		int hint = Track_Nearest(pos, -1);
-		float closest[3], off;
-		Track_Project(pos, hint, closest, off);
-
-		terminal = along - g_fWindupPosCost * off;
-		if (!g_bWindupFlew)
-			terminal -= 200.0;      // never left the ground: not a wind-up at all
-
+		terminal = Ep_WindupScore(outcome);
 		if (g_bEval)
 		{
-			float sp = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
-			PrintToServer("[CsAI]  wind-up: %d ticks, %.0f u/s onto the ramp, %.0f units off the line, airborne %s, score %.1f",
-			              g_iEpTick, sp, off, g_bWindupFlew ? "yes" : "NO", terminal);
+			static const char kRun[][] = { "running", "fell", "finished", "timed out", "stuck", "wind-up" };
+			PrintToServer("[CsAI]  wind-up: %d ground ticks, takeoff %.0f u/s, run %s in %.2fs, score %.1f",
+			              g_iEpClockTick, g_fEpTakeoffSpeed, g_bEpFollow ? kRun[outcome] : "never took off",
+			              float(g_iEpTick - g_iEpClockTick) * GetTickInterval(), terminal);
 		}
+		outcome = EP_WINDUP;
 	}
 	else if (outcome == EP_FINISHED)
 	{
@@ -394,9 +379,6 @@ stock void Ep_Finish(int outcome)
 		if (g_iEpStartState == 0 && g_fRefTime > 0.0)
 		{
 			float secs = float(g_iEpTick - g_iEpPreTicks) * GetTickInterval();
-
-			// Ratio, not a line with a floor: a floored payout stops telling
-			// a slow finish from a very slow one, and the run drifts.
 			if (secs > 0.01)
 				terminal = g_fFinishBonus * Pow(g_fRefTime / secs, g_fTimePower);
 			if (terminal < g_fFinishFloor)
@@ -405,6 +387,7 @@ stock void Ep_Finish(int outcome)
 	}
 	else if (outcome == EP_FELL || outcome == EP_STUCK)
 		terminal = -1.0;
+
 
 	int n = g_hEpBuf.Length;
 	if (n > 0 && terminal != 0.0)
@@ -437,14 +420,26 @@ stock void Ep_Finish(int outcome)
 	if (g_fTrackLength > 0.0)
 		g_fStatProgSum += (g_fEpBestS - g_fEpStartS) / g_fTrackLength;
 
-	if (outcome == EP_FELL || outcome == EP_STUCK)
+	if (g_iEpOutcomeRun == EP_FELL || g_iEpOutcomeRun == EP_STUCK)
 		g_iStatFell++;
-	else if (outcome == EP_FINISHED)
+	else if (g_iEpOutcomeRun == EP_FINISHED)
 		g_iStatFinished++;
 	else
 		g_iStatTimeout++;
 
 	g_iBatchEpisodes++;
+}
+
+/** The view and strafe state a wind-up starts from. */
+stock void Ep_WindupInit()
+{
+	g_iWindupHeld = g_iWindupHold;      // free to pick a side on the first decision
+	g_iWindupSide = 1;
+	g_iEpSide = 1;
+	g_iEpTrim = 0;
+	float ang[3];
+	GetClientEyeAngles(g_iBot, ang);
+	g_fWindupYaw = ang[1];
 }
 
 stock void Ep_Begin()
@@ -456,24 +451,26 @@ stock void Ep_Begin()
 	if (g_iEpStartState != 0)
 		g_iStatMidStart++;
 	UnfreezeBot();
+	g_bEpLearnedOpen = false;
 
-	// A wind-up episode builds ground speed from a standing start and is scored
-	// on the state it hands over. Always from the recorded spawn, never a
-	// checkpoint: there is nothing to wind up from in the middle of a map.
+	// Wind-up slot: from standing, always at the map start.
 	if (g_iWindupTicks > 0)
 	{
 		g_iEpStartState = 0;
 		Pre_Spawn(g_iBot);
 		Ep_Reset();
-		g_iEpPreTicks = g_iWindupTicks;
-		g_bEpGround   = true;
-		g_iWindupHeld = g_iWindupHold;      // free to pick a side on the first decision
-		g_iWindupSide = 1;
-		g_fWindupPrevVz = 0.0;
-		g_bWindupFlew = false;
-		float ang[3];
-		GetClientEyeAngles(g_iBot, ang);
-		g_fWindupYaw = ang[1];
+		Ep_WindupInit();
+		g_bEpGround = true;
+		return;
+	}
+
+	// Main slot: open with the learned wind-up, or with a recorded one.
+	if (g_iEpStartState == 0 && g_bPartnerLoaded &&
+	    (g_bEval ? g_bEvalLearned : (Pol_Rand() < g_fLearnedMix)) && Pre_Spawn(g_iBot))
+	{
+		Ep_Reset();
+		Ep_WindupInit();
+		g_bEpLearnedOpen = true;
 		return;
 	}
 
@@ -484,11 +481,21 @@ stock void Ep_Begin()
 	Ep_Reset();
 }
 
+/** Controller state the air policy starts from. */
+stock void Ep_ResetControl()
+{
+	g_fEpPitch = PITCH_BIAS;
+	g_iEpSide = 1;
+	g_iEpTrim = 0;
+	g_bEpCoast = false;
+	g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
+	g_fEpPendWish = g_fEpWishAngle;
+}
+
 /** Establish the episode baseline from wherever the bot currently is. */
 stock void Ep_Reset()
 {
-	// Ep_Begin reaches here even when both Pre_Begin and ApplyStateQuiet bailed
-	// out on an invalid client, and the bot can be kicked between batches.
+	// The bot can be kicked between batches.
 	if (g_iBot == -1 || !IsClientInGame(g_iBot))
 	{
 		PrintToServer("[CsAI] episode reset with no bot - aborting the run");
@@ -506,42 +513,113 @@ stock void Ep_Reset()
 	float closest[3], dist;
 	g_fEpStartS = Track_Project(pos, g_iTrackHint, closest, dist);
 
-	// Start where the human's view sits at handover rather than snapping from 0.
-	g_fEpPitch      = PITCH_BIAS;
-
 	g_fEpLastS      = g_fEpStartS;
 	g_fEpBestS      = g_fEpStartS;
 	g_iEpTick       = 0;
 	g_iEpSteps      = 0;
 	g_fEpReturn     = 0.0;
-	g_iEpOutcome    = EP_RUNNING;
 	g_iEpStuckTicks = 0;
 	g_iEpNoProgress = 0;
 	g_iEpPreTicks   = 0;
+	g_iEpClockTick  = 0;
 	g_bEpGround     = false;
+	g_bEpFollow     = false;
 	g_fEpStepReward = 0.0;
-	// start from the speed-optimal perpendicular angle rather than an arbitrary one
-	g_iEpSide = 1;
-	g_iEpTrim = 0;
-	g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
-	g_fEpPendWish = g_fEpWishAngle;
+	Ep_ResetControl();
+}
+
+/**
+ * One wind-up decision on the ground. Returns false when it hands over: the
+ * policy chose to jump, or the bot left the ground or the start zone. The timer
+ * starts on that tick, and the air policy jumps from it.
+ */
+stock bool Ep_WindupTick(int client, const float pos[3], const float vel[3], bool learn)
+{
+	bool jump = false;
+	if ((g_iEpTick % g_iFrameSkip) == 0)
+	{
+		if (learn)
+		{
+			if (g_iEpSteps > 0)
+				Ep_PushStep();
+			g_fEpStepReward = 0.0;
+		}
+
+		float obs[OBS_DIM];
+		float probe[PROBE_DIM];
+		Track_BuildObs(pos, vel, g_iTrackHint, obs);
+		Track_BuildProbe(client, pos, vel, probe);
+		for (int pi = 0; pi < PROBE_DIM; pi++)
+			obs[7 + 3 * LOOKAHEAD + pi] = probe[pi];
+
+		float logp;
+		int act = Pol_Act(obs, logp, g_bEval && g_bEvalGreedy, learn ? NET_SELF : NET_PARTNER);
+		int prevSide = g_iEpSide;
+		int prevTrim = g_iEpTrim;
+		jump = (act == POL_COAST);
+		Pol_ApplyAction(act, g_iEpSide, g_iEpTrim);
+
+		if (learn)
+		{
+			g_iEpAction = act;
+			g_fEpLogp = logp;
+			if (g_iEpSide != prevSide)
+				g_fEpStepReward -= g_fSwitchCost;
+			else if (g_iEpTrim != prevTrim)
+				g_fEpStepReward -= g_fTrimCost;
+			for (int pi = 0; pi < PROBE_DIM; pi++)
+				g_fEpPendProbe[pi] = probe[pi];
+			g_fEpPendWish = g_fEpWishAngle;
+			g_fEpPendPos[0] = pos[0];
+			g_fEpPendPos[1] = pos[1];
+			g_fEpPendPos[2] = pos[2];
+			g_fEpPendVel[0] = vel[0];
+			g_fEpPendVel[1] = vel[1];
+			g_fEpPendVel[2] = vel[2];
+			g_iEpSteps++;
+		}
+	}
+
+	bool grounded = (GetEntityFlags(client) & FL_ONGROUND) != 0;
+	if (jump || !grounded || !Zone_Contains(pos) || g_iEpTick >= g_iWindupMax)
+	{
+		g_fEpTakeoffSpeed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
+		return false;
+	}
+	return true;
 }
 
 stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 {
+	// Main slot, learned wind-up: the partner policy drives until takeoff, unrecorded.
+	if (g_bEpLearnedOpen)
+	{
+		float p0[3], v0[3];
+		GetClientAbsOrigin(client, p0);
+		GetEntPropVector(client, Prop_Data, "m_vecVelocity", v0);
+		g_iTrackHint = Track_Nearest(p0, g_iTrackHint);
+		if (Ep_WindupTick(client, p0, v0, false))
+		{
+			Ep_ApplyGround(buttons, movement, angles);
+			if (g_bEval)
+			{
+				Rec_Tick(client, buttons);
+				g_iRecPreFrames++;
+			}
+			g_iEpTick++;
+			return true;
+		}
+		g_bEpLearnedOpen = false;
+		float takeoff = g_fEpTakeoffSpeed;
+		Ep_Reset();                      // the clock starts on this tick
+		g_fEpTakeoffSpeed = takeoff;
+	}
+
 	if (g_bPreActive)
 	{
-		if (g_iPreLearned > 0 && g_iPreIndex >= g_iPreCount - g_iPreLearned)
+		if (Pre_Tick(buttons, movement, angles))
 		{
-			g_bPreActive = false;
-			Ep_Reset();
-			g_iEpPreTicks = g_iPreCount - g_iPreIndex;
-			g_bEpGround   = true;
-		}
-		else if (Pre_Tick(buttons, movement, angles))
-		{
-			// Record it so the saved replay contains the whole run. It is still
-			// not a training step - no observation, no action, no reward.
+			// Recorded for the replay; not a training step.
 			if (g_bEval)
 			{
 				Rec_Tick(client, buttons);
@@ -551,12 +629,6 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		}
 		Ep_Reset();                      // handover: the baseline starts here
 	}
-
-	// Wind-up: the ground phase lasts as long as the bot stands on the ground.
-	if (g_iWindupTicks > 0)
-		g_bEpGround = (GetEntityFlags(client) & FL_ONGROUND) != 0;
-	else
-		g_bEpGround = (g_iEpTick < g_iEpPreTicks);
 
 	float pos[3], vel[3];
 	GetClientAbsOrigin(client, pos);
@@ -578,25 +650,57 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 
 	// This tick's position is the result of the decision in flight, so its
 	// progress and deviation are charged to that decision before a new one starts.
+	// A wind-up is scored on its run alone.
 	float dS = s - g_fEpLastS;
 	g_fEpLastS = s;
-	g_fEpStepReward += dS / 100.0;
-
-	if (g_fDeviationCost > 0.0 && g_fMaxDeviation > 0.0)
+	if (g_iWindupTicks == 0)
 	{
-		float off = dist / g_fMaxDeviation;
-		if (off > 1.0) off = 1.0;
-		g_fEpStepReward -= g_fDeviationCost * off * off;
+		g_fEpStepReward += dS / 100.0;
+		if (g_fDeviationCost > 0.0 && g_fMaxDeviation > 0.0)
+		{
+			float off = dist / g_fMaxDeviation;
+			if (off > 1.0) off = 1.0;
+			g_fEpStepReward -= g_fDeviationCost * off * off;
+		}
 	}
 
 	if (Ep_CheckEnd(client, s, dist, vel))
 		return false;
 
-	if ((g_iEpTick % g_iFrameSkip) == 0)
+	// Wind-up slot: the policy being trained drives the ground phase.
+	if (g_bEpGround)
 	{
+		if (Ep_WindupTick(client, pos, vel, true))
+		{
+			Ep_ApplyGround(buttons, movement, angles);
+			if (g_bEval)
+			{
+				Rec_Tick(client, buttons);
+				g_iRecPreFrames++;
+			}
+			g_iEpTick++;
+			return true;
+		}
+		// Takeoff: bank the last wind-up decision, then the main policy flies the
+		// rest frozen, so the wind-up is judged on the run it sets up.
 		if (g_iEpSteps > 0)
-			Ep_PushStep();                 // bank the previous decision
-		g_fEpStepReward = 0.0;             // open this decision's accumulator
+			Ep_PushStep();
+		g_bEpGround = false;
+		g_bEpFollow = true;
+		g_iEpClockTick = g_iEpTick;
+		g_iEpPreTicks = g_iEpTick;
+		g_iEpNoProgress = 0;
+		Ep_ResetControl();
+	}
+
+	if (((g_iEpTick - g_iEpClockTick) % g_iFrameSkip) == 0)
+	{
+		if (!g_bEpFollow)
+		{
+			if (g_iEpSteps > 0)
+				Ep_PushStep();             // bank the previous decision
+			g_fEpStepReward = 0.0;         // open this decision's accumulator
+		}
 
 		float obs[OBS_DIM];
 		Track_BuildObs(pos, vel, g_iTrackHint, obs);
@@ -631,7 +735,9 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			}
 		}
 
-		g_iEpAction = Pol_Act(obs, g_fEpLogp, g_bEval && g_bEvalGreedy);
+		float logp;
+		int act = g_bEpFollow ? Pol_Act(obs, logp, true, NET_PARTNER)
+		                      : Pol_Act(obs, logp, g_bEval && g_bEvalGreedy, NET_SELF);
 
 		if (g_bScripted)
 		{
@@ -642,8 +748,8 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		{
 			int prevSide = g_iEpSide;
 			int prevTrim = g_iEpTrim;
-			g_bEpCoast = (g_iEpAction == POL_COAST);
-			Pol_ApplyAction(g_iEpAction, g_iEpSide, g_iEpTrim);
+			g_bEpCoast = (act == POL_COAST);
+			Pol_ApplyAction(act, g_iEpSide, g_iEpTrim);
 			if (g_iForceSide != 0)
 			{
 				g_iEpSide  = (g_iForceSide == 1) ? 1 : -1;
@@ -651,36 +757,38 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 				g_bEpCoast = false;
 			}
 			g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
-			if (g_iEpSide != prevSide)
-				g_fEpStepReward -= g_fSwitchCost;
-			else if (g_iEpTrim != prevTrim)
-				g_fEpStepReward -= g_fTrimCost;
+			if (!g_bEpFollow)
+			{
+				if (g_iEpSide != prevSide)
+					g_fEpStepReward -= g_fSwitchCost;
+				else if (g_iEpTrim != prevTrim)
+					g_fEpStepReward -= g_fTrimCost;
+			}
 		}
 		while (g_fEpWishAngle >  180.0) g_fEpWishAngle -= 360.0;
 		while (g_fEpWishAngle < -180.0) g_fEpWishAngle += 360.0;
-		g_iEpSteps++;
 
-		// Ground time in a wind-up is off the clock: the timer starts on the jump.
-		if (!(g_iWindupTicks > 0 && g_bEpGround))
+		if (!g_bEpFollow)
+		{
+			g_iEpAction = act;
+			g_fEpLogp = logp;
+			g_iEpSteps++;
 			g_fEpStepReward -= g_fTimeCost;
 
-		g_fEpPendPos[0] = pos[0];
-		g_fEpPendPos[1] = pos[1];
-		g_fEpPendPos[2] = pos[2];
-		g_fEpPendVel[0] = vel[0];
-		g_fEpPendVel[1] = vel[1];
-		g_fEpPendVel[2] = vel[2];
+			g_fEpPendPos[0] = pos[0];
+			g_fEpPendPos[1] = pos[1];
+			g_fEpPendPos[2] = pos[2];
+			g_fEpPendVel[0] = vel[0];
+			g_fEpPendVel[1] = vel[1];
+			g_fEpPendVel[2] = vel[2];
+		}
 	}
 
 	Ep_ApplyAction(vel, buttons, movement, angles);
 
 	// Captured after the action is decoded, so the view angle is the one used.
 	if (g_bEval)
-	{
 		Rec_Tick(client, buttons);
-		if (g_bEpGround)
-			g_iRecPreFrames++;
-	}
 
 	g_iEpTick++;
 	return true;
@@ -689,27 +797,6 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 /** Ends the episode if the current state is terminal. g_iEpTick ticks have run. */
 stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
 {
-	if (g_iWindupTicks > 0)
-	{
-		// A wind-up ends on the first ramp. A surf ramp does not set FL_ONGROUND,
-		// so contact shows as vertical acceleration that is no longer gravity.
-		if (!g_bEpGround)
-			g_bWindupFlew = true;
-
-		if (g_cvGravity == null)
-			g_cvGravity = FindConVar("sv_gravity");
-		float gravity = (g_cvGravity != null) ? g_cvGravity.FloatValue : 800.0;
-
-		float dvz = (vel[2] - g_fWindupPrevVz) * (1.0 / GetTickInterval());
-		g_fWindupPrevVz = vel[2];
-
-		bool onRamp = (g_bWindupFlew && !g_bEpGround && g_iEpTick > 1 && vel[2] < -200.0
-		               && FloatAbs(dvz + gravity) > 150.0);
-
-		if (onRamp || g_iEpTick >= g_iWindupTicks)
-			return Ep_End(EP_WINDUP);
-	}
-
 	float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
 	if (speed < 40.0 && (GetEntityFlags(client) & FL_ONGROUND) && !g_bEpGround)
 		g_iEpStuckTicks++;
@@ -730,7 +817,7 @@ stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
 
 stock bool Ep_End(int outcome)
 {
-	if (g_iEpSteps > 0)
+	if (g_iEpSteps > 0 && !g_bEpFollow)
 		Ep_PushStep();
 	Ep_Finish(outcome);
 	return true;

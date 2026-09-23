@@ -112,10 +112,18 @@ function Get-Progress([string]$slot) {
             $s += ('   finishing {0:N0}%' -f (100.0 * $fin / $runs))
             if ($medN) { $s += ('   median {0:N2}s' -f ($med / $medN)) }
         } elseif ($retN) {
-            $s += ('   mean return {0:N0}' -f ($ret / $retN))
+            $s += ('   mean score {0:N1}' -f ($ret / $retN))
         }
         return $s
     } catch { return '' }
+}
+
+function Get-Best([string]$slot) {
+    $f = Join-Path $Data "best$(Sfx $slot).txt"
+    if (-not (Test-Path $f)) { return '' }
+    $v = (Get-Content $f -Raw).Trim() -split '\s+'
+    if ($v.Count -lt 4 -or [int]$v[1] -eq 0) { return '' }
+    return ('   best {0}/{1} at {2:N2}s (gen {3})' -f $v[1], $v[2], [double]$v[3], $v[0])
 }
 
 function Read-Tail([string]$path, [int]$n = 60) {
@@ -358,6 +366,7 @@ function Update-Panel {
         $line = "{0}: {1}   power {2}" -f $sl, $state, (Get-Power $sl)
         $pg = Get-Progress $sl
         if ($pg) { $line += "   $pg" }
+        $line += (Get-Best $sl)
         $lines += $line
     }
     $busy = Get-Busy
