@@ -1,105 +1,123 @@
 param(
     [ValidateSet('idle', 'low', 'medium', 'high', 'max')]
     [string]$Power = '',
-    [int]$Actors    = 0,           # parallel srcds actors; 0 = auto from core count
-    [string]$Map    = '',          # blank = whatever data/map.txt says, else surf_demise
+    [int]$Actors    = 0,           # parallel servers; 0 = from the power level
+    [string]$Map    = '',          # blank = data/map.txt, else surf_demise
+    [string]$Slot   = '',          # blank = main; a name trains a second run alongside
     [int]$FrameSkip = 2,           # ticks per decision
     [double]$DevCost = 0.5,        # penalty for drifting off the reference line
-    [double]$TimeCost = 0.08,      # charged per decision, so finishing sooner pays
-    [double]$EntFinal = 0.0,       # anneal the entropy bonus to this (0 = no anneal)
+    [double]$TimeCost = 0.08,      # charged per decision
+    [double]$FinishBonus = 50.0,   # what a finish at the reference time pays
+    [double]$FinishFloor = 0.5,    # a finish never pays less than this
+    [double]$TrimCost = 0.05,      # per aim change
+    [double]$SwitchCost = 0.40,    # per strafe key change
+    [double]$Entropy = 0.01,       # exploration bonus
+    [double]$EntFinal = 0.0,       # anneal the bonus to this (0 = no anneal)
     [int]$EntAnneal = 2000,        # generations to reach EntFinal
-    [int]$PreLearn = 0,            # trailing ticks of the wind-up the policy drives
-    [string]$Slot = '',            # name a slot to train a second thing alongside the first
-    [int]$Windup = 0,              # >0 = wind-up episodes of this many ticks
-    [double]$FinishBonus = 50.0,   # base reward for finishing at all
-    [double]$FinishFloor = 5.0,    # a finish never scores below this, however slow
-    [double]$TrimCost = 0.05,      # per aim change between decisions - smoothness
-    [double]$SwitchCost = 0.40,    # per strafe-key change; human does 0.95/s
-    [int]$StallSeconds = 240,      # no new generation for this long = say so, loudly
-    [double]$Entropy = 0.02,       # exploration pressure; 0.003 let the policy saturate
     [double]$StateMix = 0.3,       # share of episodes starting mid-map
     [double]$StateLo = 0.61,
     [double]$StateHi = 0.72,
-    [double]$Gamma  = 0.997,       # discount; horizon is FrameSkip/(1-Gamma) ticks
-    [int]$EvalEvery = 40,          # generations between automatic evaluations
-    [int]$ReportEvery = 300,       # seconds between report snapshots
+    [double]$Gamma  = 0.997,
+    [int]$PreLearn = 0,            # trailing wind-up ticks the policy drives
+    [int]$Windup = 0,              # >0 = wind-up episodes of this many ticks
+    [int]$StallSeconds = 240,      # no new generation for this long counts as a stall
+    [int]$SilentSeconds = 600,     # a server quiet this long while others work is restarted
+    [int]$EvalEvery = 40,          # generations between evaluations
+    [int]$ReportEvery = 300,       # seconds between reports
     [switch]$Stop
 )
 
 $ErrorActionPreference = 'Continue'
-$Root = Split-Path -Parent $PSScriptRoot
-$PowerFile = Join-Path (Join-Path $Root 'data') $(if ($Slot) { "power_$Slot.txt" } else { 'power.txt' })
-$LogFile = Join-Path $Root 'logs\daemon.log'
-$TrainLog = Join-Path $Root 'data\train_log.csv'
-$StopFile = Join-Path $Root $(if ($Slot) { "data\daemon_$Slot.stop" } else { 'data\daemon.stop' })
-$MapFile  = Join-Path $Root 'data\map.txt'
-$Game     = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source'
-$Data     = Join-Path $Game 'cstrike\addons\sourcemod\data\csai'
+. (Join-Path $PSScriptRoot 'hidden.ps1')
 
-# One place records which map is being trained, so the reports and the panel stop
-# naming a map they were written against and start naming the one that is running.
+$Root     = Split-Path -Parent $PSScriptRoot
+$DataDir  = Join-Path $Root 'data'
+$LogDir   = Join-Path $Root 'logs'
+$Name     = if ($Slot) { $Slot } else { 'main' }
+$Sfx      = if ($Slot) { "_$Slot" } else { '' }
+$PowerFile = Join-Path $DataDir "power$Sfx.txt"
+$StopFile  = Join-Path $DataDir "daemon$Sfx.stop"
+$TrainLog  = Join-Path $DataDir "train_log$Sfx.csv"
+$Ckpt      = Join-Path $DataDir "ckpt$Sfx.npz"
+$LogFile   = Join-Path $LogDir "daemon$Sfx.log"
+$LearnLog  = Join-Path $LogDir "learner$Sfx.log"
+$MapFile   = Join-Path $DataDir 'map.txt'
+$Data      = Join-Path $GameRoot 'cstrike\addons\sourcemod\data\csai'
+$OutDir    = Join-Path $Data "out$Sfx"
+$Weights   = Join-Path $Data "weights$Sfx.txt"
+
+# Ports: 27015 + 10 per actor for main; other slots get their own block.
+$PortBase = 27015
+if ($Slot) { $PortBase = 27215 + 200 * ((($Slot.ToCharArray() | ForEach-Object { [int]$_ }) | Measure-Object -Sum).Sum % 8) }
+$EvalPort = $PortBase + 150
+
+New-Item -ItemType Directory -Force -Path $DataDir, $LogDir | Out-Null
+foreach ($f in @($LogFile, $LearnLog)) {
+    if ((Test-Path $f) -and (Get-Item $f).Length -gt 5MB) { Move-Item $f ($f -replace '\.log$', '.old.log') -Force }
+}
+
 if (-not $Map) {
-    if (Test-Path $MapFile) { $Map = (Get-Content $MapFile -Raw).Trim() }
+    if (Test-Path $MapFile) { $Map = (Get-Content $MapFile -Raw).Trim([char]0xFEFF + " `t`r`n") }
     if (-not $Map) { $Map = 'surf_demise' }
 }
-New-Item -ItemType Directory -Force -Path (Split-Path $MapFile) | Out-Null
-# ASCII, not utf8: Set-Content -Encoding utf8 prepends a BOM that Python reads
-# as part of the map name.
-Set-Content -Path $MapFile -Value $Map -Encoding ascii
+if (-not $Slot) { Set-Content -Path $MapFile -Value $Map -Encoding ascii }
 
 $Levels = @{
-    'idle'   = @{ Timescale = 5;   Priority = 'Idle';        Batch = 32; Actors = 1;  Desc = 'barely noticeable - gaming or video' }
-    'low'    = @{ Timescale = 20;  Priority = 'BelowNormal'; Batch = 48; Actors = 2;  Desc = 'you are using the PC' }
+    'idle'   = @{ Timescale = 5;   Priority = 'Idle';        Batch = 32; Actors = 1;  Desc = 'barely noticeable' }
+    'low'    = @{ Timescale = 20;  Priority = 'BelowNormal'; Batch = 48; Actors = 2;  Desc = 'while using the PC' }
     'medium' = @{ Timescale = 80;  Priority = 'Normal';      Batch = 64; Actors = 4;  Desc = 'background work' }
-    'high'   = @{ Timescale = 80;  Priority = 'Normal';      Batch = 64; Actors = 6;  Desc = 'default - half the machine' }
-    'max'    = @{ Timescale = 80;  Priority = 'AboveNormal'; Batch = 96; Actors = 11; Desc = 'you are away - all of it' }
+    'high'   = @{ Timescale = 80;  Priority = 'Normal';      Batch = 64; Actors = 6;  Desc = 'about half the machine' }
+    'max'    = @{ Timescale = 80;  Priority = 'AboveNormal'; Batch = 96; Actors = 11; Desc = 'all of it' }
 }
 
 function Write-Log([string]$msg) {
     $line = "{0}  {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg
     Write-Host $line
-    try {
-        New-Item -ItemType Directory -Force -Path (Split-Path $LogFile) | Out-Null
-        Add-Content -Path $LogFile -Value $line -Encoding utf8
-    } catch {}
+    try { Add-Content -Path $LogFile -Value $line -Encoding utf8 } catch {}
 }
 
 function Get-Power {
     if (Test-Path $PowerFile) {
-        $v = (Get-Content $PowerFile -Raw -ErrorAction SilentlyContinue).Trim([char]0xFEFF + " `t`r`n").ToLower()
-        if ($Levels.ContainsKey($v)) { return $v }
+        $v = (Get-Content $PowerFile -Raw -ErrorAction SilentlyContinue)
+        if ($v) {
+            $v = $v.Trim([char]0xFEFF + " `t`r`n").ToLower()
+            if ($Levels.ContainsKey($v)) { return $v }
+        }
     }
     return 'high'
 }
 
-function Set-Power([string]$level) {
-    New-Item -ItemType Directory -Force -Path (Split-Path $PowerFile) | Out-Null
-    # ASCII for the same reason as the marker file above: -Encoding utf8
-    # prepends a byte-order mark, and a level of "﻿high" matches nothing.
-    Set-Content -Path $PowerFile -Value $level -Encoding ascii
+function Get-Procs([string]$name, [string]$match) {
+    @(Get-CimInstance Win32_Process -Filter "Name='$name'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like $match })
 }
 
-function Get-Procs([string]$name, [string]$match) {
-    Get-CimInstance Win32_Process -Filter "Name='$name'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like $match }
+function Test-Mine([string]$cl) {
+    # Which slot a process belongs to, from its command line.
+    $theirs = 'main'
+    if ($cl -match '\+csai_slot\s+(\S+)') { $theirs = $Matches[1] }
+    elseif ($cl -match '-Slot\s+(\S+)') { $theirs = $Matches[1] }
+    elseif ($cl -match 'out_([A-Za-z0-9]+)') { $theirs = $Matches[1] }
+    return ($theirs -eq $Name)
+}
+
+function Get-MyLearners { @(Get-Procs 'python.exe' '*learn.py*' | Where-Object { Test-Mine $_.CommandLine }) }
+function Get-MySupervisors {
+    @(Get-Procs 'powershell.exe' '*daemon.ps1*' | Where-Object {
+        $_.ProcessId -ne $PID -and $_.CommandLine -notlike '*-Stop*' -and (Test-Mine $_.CommandLine) })
 }
 
 function Stop-All {
-    # Only this slot's processes. Without the filter, stopping one slot killed
-    # every other slot's actors and learner too, because they all match
-    # "learn.py" and "csai_train_batches".
-    foreach ($p in @(Get-Procs 'python.exe' '*learn.py*')) {
-        $mine = if ($Slot) { $p.CommandLine -like "*out_$Slot*" }
-                else       { $p.CommandLine -notlike '*--outdir*out_*' }
-        if (-not $mine) { continue }
+    foreach ($p in (Get-MyLearners)) {
         Write-Log "  stop learner pid $($p.ProcessId)"
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
-    foreach ($p in @(Get-Procs 'srcds_win64.exe' '*csai_train_batches*')) {
-        $mine = if ($Slot) { $p.CommandLine -like "*+csai_slot $Slot*" }
-                else       { $p.CommandLine -notlike '*+csai_slot *' }
-        if (-not $mine) { continue }
-        Write-Log "  stop actor pid $($p.ProcessId)"
+    foreach ($p in (Get-Procs 'powershell.exe' '*eval.ps1*')) {
+        if (Test-Mine $p.CommandLine) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($p in (Get-Procs 'srcds_win64.exe' '*+csai_actor*')) {
+        if (-not (Test-Mine $p.CommandLine)) { continue }
+        Write-Log "  stop server pid $($p.ProcessId)"
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
 }
@@ -114,57 +132,32 @@ function Get-Gen {
 }
 
 function Start-Learner {
-    $args = @((Join-Path $Root 'tools\learn.py'), '--batches', '1000000', '--timeout', '900',
-              '--gamma', $Gamma, '--ent', $Entropy, '--frameskip', $FrameSkip,
-              '--track', ('"' + (Join-Path $Data "$($Map)_track.txt") + '"'),
-              '--states', ('"' + (Join-Path $Data "$($Map)_states.txt") + '"'))
-    if ($EntFinal -gt 0.0) {
-        $args += @('--ent-final', $EntFinal, '--ent-anneal', $EntAnneal)
-    }
-    if ($Slot) {
-        $args += @('--weights', ('"' + (Join-Path $Data "weights_$Slot.txt") + '"'),
-                   '--outdir',  ('"' + (Join-Path $Data "out_$Slot") + '"'),
-                   '--ckpt',    ('"' + (Join-Path (Join-Path $Root "data") "ckpt_$Slot.npz") + '"'),
-                   '--log',     ('"' + (Join-Path (Join-Path $Root "data") "train_log_$Slot.csv") + '"'),
-                   '--kl-ref',  '0')
-        if (Test-Path (Join-Path (Join-Path $Root "data") "ckpt_$Slot.npz")) { $args += '--resume' }
-    }
-    elseif (Test-Path (Join-Path $Root 'data\ckpt.npz')) { $args += '--resume' }
-    # Per slot, or two learners write over each other's output and a stale error
-    # from one looks like a live error from the other.
-    $logDir = Join-Path $Root 'logs'
-    $tag = if ($Slot) { "learner_$Slot" } else { 'learner' }
-    $learnerLog = Join-Path $logDir "$tag.log"
-    $learnerErr = Join-Path $logDir "$tag.err.log"
-    New-Item -ItemType Directory -Force -Path (Split-Path $learnerLog) | Out-Null
-    $lp = Start-Process -FilePath 'python' -ArgumentList $args `
-        -WorkingDirectory (Join-Path $Root 'tools') -WindowStyle Hidden `
-        -RedirectStandardOutput $learnerLog -RedirectStandardError $learnerErr -PassThru
-
-    if ($lp) {
-        try { $lp.PriorityClass = 'AboveNormal' } catch {}
-    }
-    Write-Log "  learner launched$(if ($args -contains '--resume') { ' (resuming)' }) - output in logs\learner.log"
+    $la = @((Join-Path $Root 'tools\learn.py'), '--batches', '1000000', '--timeout', '900',
+            '--gamma', $Gamma, '--ent', $Entropy, '--frameskip', $FrameSkip,
+            '--track', (Join-Path $Data "$($Map)_track.txt"),
+            '--states', (Join-Path $Data "$($Map)_states.txt"),
+            '--weights', $Weights, '--outdir', $OutDir,
+            '--ckpt', $Ckpt, '--log', $TrainLog, '--out', $LearnLog)
+    if ($EntFinal -gt 0.0) { $la += @('--ent-final', $EntFinal, '--ent-anneal', $EntAnneal) }
+    if ($Slot) { $la += @('--kl-ref', '0') }
+    if (Test-Path $Ckpt) { $la += '--resume' }
+    $lp = Start-Hidden 'python.exe' $la (Join-Path $Root 'tools')
+    if ($lp) { try { $lp.PriorityClass = 'AboveNormal' } catch {} }
+    Write-Log "  learner started$(if ($la -contains '--resume') { ' (resuming)' }), output in logs\$(Split-Path $LearnLog -Leaf)"
 }
 
-function Start-Actor([string]$level, [int]$id = 0) {
+function Start-Actor([string]$level, [int]$id) {
     $cfg = $Levels[$level]
-
-    $outDir = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike\addons\sourcemod\data\csai\out'
-    if (Test-Path $outDir) {
-        Get-ChildItem $outDir -Filter "a${id}_batch_*.bin" -ErrorAction SilentlyContinue | ForEach-Object {
-            $done = [IO.Path]::ChangeExtension($_.FullName, '.done')
-            if (-not (Test-Path $done)) { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+    # A half-written batch from a killed server would otherwise sit there forever.
+    Get-ChildItem $OutDir -Filter "a${id}_batch_*.bin" -ErrorAction SilentlyContinue | ForEach-Object {
+        if (-not (Test-Path ([IO.Path]::ChangeExtension($_.FullName, '.done')))) {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
         }
     }
-    $game = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source'
     $a = @(
-        '-console', '-game', 'cstrike', '-maxplayers', '6',
-        '+sv_lan', '1', '-insecure',
-        '-port', (27015 + 10 * $id),
         '+csai_actor', $id,
         '+csai_seed', (([int]((Get-Date).Ticks % 100000)) * 32 + $id * 7919 + 1),
-        '+servercfgfile', 'server_66.cfg', '+map', $Map,
+        '+map', $Map,
         '+csai_train_batches', '1000000', '+csai_train_sync', '1',
         '+csai_batch', $cfg.Batch, '+csai_frameskip', $FrameSkip,
         '+csai_states', '1', '+csai_budget', '6000', '+csai_deviation', '600',
@@ -176,14 +169,9 @@ function Start-Actor([string]$level, [int]$id = 0) {
         '+csai_bench_timescale', $cfg.Timescale,
         '+csai_bench_quit', '0', '+csai_bench_delay', '8'
     )
-    # Only actor 0 keeps -condebug, so parallel instances do not contend on one
-    # console.log and eval's log parsing still sees a quiet file.
-    if ($id -eq 0) { $a += '-condebug' }
-    # Appended, not inlined: an inline conditional inside the array literal puts
-    # a null element into the argument list and the process fails to start.
     if ($Slot) { $a += @('+csai_slot', $Slot) }
-    $p = Start-Process -FilePath (Join-Path $game 'srcds_win64.exe') -ArgumentList $a `
-        -WorkingDirectory $game -PassThru -WindowStyle Hidden
+    $p = Start-Srcds "csai_${Name}_a$id" ($PortBase + 10 * $id) $a
+    if (-not $p) { Write-Log "  actor $id did not start"; return -1 }
     Start-Sleep -Seconds 2
     try { $p.PriorityClass = $cfg.Priority } catch {}
     Write-Log "  actor $id started pid $($p.Id) - timescale $($cfg.Timescale), priority $($cfg.Priority), batch $($cfg.Batch)"
@@ -191,120 +179,80 @@ function Start-Actor([string]$level, [int]$id = 0) {
 }
 
 function Invoke-Report([switch]$Snapshot) {
+    if ($Slot) { return }
     $a = @((Join-Path $Root 'tools\report.py'))
     if ($Snapshot) { $a += '--snapshot' }
-    Start-Process -FilePath 'python' -ArgumentList $a -WorkingDirectory $Root `
-        -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue | Out-Null
+    $p = Start-Hidden 'python.exe' $a $Root
+    if ($p) { [void]$p.WaitForExit(120000) }
 }
 
 function Invoke-Eval {
-    Write-Log '  evaluating policy (produces a replay to watch)'
-    Start-Process -FilePath 'powershell' `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                        (Join-Path $Root 'tools\eval.ps1'), '-Runs', '8', '-Map', $Map,
-                        '-Greedy', '0',
-                        '-FrameSkip', $FrameSkip, '-DevCost', $DevCost,
-                        '-Timescale', '20', '-TimeoutSec', '600') `
-        -WorkingDirectory $Root -WindowStyle Hidden -PassThru -ErrorAction SilentlyContinue
+    Write-Log '  evaluating the policy (writes a replay)'
+    $ea = @('-Runs', '8', '-Map', $Map, '-Greedy', '0', '-Port', $EvalPort,
+            '-FrameSkip', $FrameSkip, '-DevCost', $DevCost, '-Windup', $Windup,
+            '-Timescale', '20', '-TimeoutSec', '600')
+    if ($Slot) { $ea += @('-Slot', $Slot) }
+    return (Start-HiddenPowerShell (Join-Path $Root 'tools\eval.ps1') $ea $Root)
 }
 
 # ---------------------------------------------------------------------------
 
 if ($Stop) {
-    Write-Log 'stopping training'
+    Write-Log "stopping slot $Name"
     New-Item -ItemType File -Force -Path $StopFile | Out-Null
     Stop-All
-
-    # Wait for the supervisor itself to exit. It only notices the stop file on
-    # its next poll, so returning immediately means a restart races it: the old
-    # daemon is still alive, refuses the new one, and training quietly stays
-    # down with nobody having reported an error.
-    $slotTagW = if ($Slot) { "-Slot $Slot" } else { '' }
-    for ($i = 0; $i -lt 40; $i++) {
-        $alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-                   Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*-File*daemon.ps1*' -and
-                                  $_.CommandLine -notlike '*-Stop*' } |
-                   Where-Object {
-                       $theirs = if ($_.CommandLine -match '-Slot\s+(\S+)') { $Matches[1] } else { '' }
-                       $theirs -eq $Slot
-                   })
-        if ($alive.Count -eq 0) { break }
-        Start-Sleep -Seconds 1
-    }
-
-    # If it still has not gone, end it directly. Stop has to mean stopped: the
-    # marker alone is not enough, because killing the actors sends the daemon
-    # straight into restarting them and it can spend a minute in there without
-    # once looking at the marker.
-    $left = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-              Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*-File*daemon.ps1*' -and
-                             $_.CommandLine -notlike '*-Stop*' } |
-              Where-Object {
-                  $theirs = if ($_.CommandLine -match '-Slot\s+(\S+)') { $Matches[1] } else { '' }
-                  $theirs -eq $Slot
-              })
-    foreach ($d in $left) {
-        Write-Log "  supervisor $($d.ProcessId) did not exit on its own - ending it"
+    # The supervisor only sees the marker on its next poll; give it that long.
+    for ($i = 0; $i -lt 40 -and @(Get-MySupervisors).Count -gt 0; $i++) { Start-Sleep -Seconds 1 }
+    foreach ($d in (Get-MySupervisors)) {
+        Write-Log "  supervisor $($d.ProcessId) did not exit - ending it"
         Stop-Process -Id $d.ProcessId -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 2
-    Stop-All                      # anything the supervisor restarted on its way out
+    Stop-All
     Write-Log 'stopped'
     exit 0
 }
 
-# One daemon per slot. Two daemons on the same slot would fight over the same
-# weights file and batch directory; on different slots they share nothing.
-$slotTag = if ($Slot) { "-Slot $Slot" } else { '' }
-$others = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*-File*daemon.ps1*' -and
-                           $_.CommandLine -notlike '*-Stop*' } |
-            Where-Object {
-                $theirs = if ($_.CommandLine -match '-Slot\s+(\S+)') { $Matches[1] } else { '' }
-                $theirs -eq $Slot
-            })
+# One supervisor per slot.
+$others = @(Get-MySupervisors)
 if ($others.Count -gt 0) {
-    $mine = if ($Slot) { $Slot } else { 'main' }
-    Write-Log "refusing to start: slot '$mine' already has a supervisor (pid $($others[0].ProcessId))"
-    Write-Log "  its command line: $($others[0].CommandLine)"
+    Write-Log "refusing to start: slot '$Name' already has a supervisor (pid $($others[0].ProcessId))"
     exit 1
 }
 
 Remove-Item $StopFile -ErrorAction SilentlyContinue
-if ($Power) { Set-Power $Power }
+if ($Power) { Set-Content -Path $PowerFile -Value $Power -Encoding ascii }
 $level = Get-Power
 
-Write-Log ("================ CsAI training daemon ================  slot: " + $(if ($Slot) { $Slot } else { 'main' }))
+Write-Log "================ CsAI training ================  slot: $Name"
 Write-Log "power: $level - $($Levels[$level].Desc)"
 Stop-All
 Start-Sleep -Seconds 2
 
-$outDir = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrikeddons\sourcemod\data\csai\out'
-if (Test-Path $outDir) {
-    $swept = 0
-    Get-ChildItem $outDir -Filter 'a*_batch_*.bin' -ErrorAction SilentlyContinue | ForEach-Object {
-        if (-not (Test-Path ([IO.Path]::ChangeExtension($_.FullName, '.done')))) {
-            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
-            $swept++
-        }
-    }
-    if ($swept -gt 0) { Write-Log "  swept $swept abandoned batch file(s)" }
-}
+# Leftovers from the last run are from an older policy.
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$swept = @(Get-ChildItem $OutDir -Filter 'a*_batch_*' -ErrorAction SilentlyContinue)
+$swept | Remove-Item -Force -ErrorAction SilentlyContinue
+if ($swept.Count -gt 0) { Write-Log "  cleared $($swept.Count) old batch file(s)" }
+Remove-Item (Join-Path $LogDir "learner$Sfx.err.log") -ErrorAction SilentlyContinue
+
 $ActorsOverride = $Actors
 if ($Actors -le 0) { $Actors = $Levels[$level].Actors }
 
 Start-Learner
 Start-Sleep -Seconds 3
 $ActorPids = @{}
+$ActorLen = @{}
+$ActorSeen = @{}
 for ($i = 0; $i -lt $Actors; $i++) {
     $ActorPids[$i] = Start-Actor $level $i
+    $ActorSeen[$i] = Get-Date
     Start-Sleep -Seconds 2
 }
-Write-Log "  $Actors actor(s) running on $([Environment]::ProcessorCount) logical cores"
+Write-Log "  $Actors server(s) running on $([Environment]::ProcessorCount) logical cores"
 
 $evalProc = $null
 $evalStartedAt = $null
-
 $lastGen = Get-Gen
 $lastGenAt = Get-Date
 $stallWarned = $false
@@ -313,9 +261,17 @@ $lastEvalGen = $lastGen
 $lastReport = Get-Date
 $appliedLevel = $level
 
+function Restart-Actor([int]$i) {
+    if ($ActorPids.ContainsKey($i) -and $ActorPids[$i] -gt 0) {
+        Stop-Process -Id $ActorPids[$i] -Force -ErrorAction SilentlyContinue
+    }
+    $script:ActorPids[$i] = Start-Actor $appliedLevel $i
+    $script:ActorSeen[$i] = Get-Date
+    $script:ActorLen.Remove($i)
+}
+
 while ($true) {
     Start-Sleep -Seconds 15
-
     if (Test-Path $StopFile) { Write-Log 'stop requested'; Stop-All; break }
 
     if ($evalProc -and $evalProc.HasExited) {
@@ -324,87 +280,70 @@ while ($true) {
         $evalProc = $null
     }
 
-    # power change -> restart the actor with new settings. The learner keeps its
-    # checkpoint, so nothing trained is lost.
+    # Power change: restart the servers with the new settings. The learner keeps going.
     $want = Get-Power
     if ($want -ne $appliedLevel) {
         Write-Log "power changed: $appliedLevel -> $want ($($Levels[$want].Desc))"
         $newCount = if ($ActorsOverride -gt 0) { $ActorsOverride } else { $Levels[$want].Actors }
-        if ($newCount -ne $Actors) {
-            Write-Log "  actors: $Actors -> $newCount"
-            foreach ($k in @($ActorPids.Keys)) {
-                if ($k -ge $newCount) {
-                    Stop-Process -Id $ActorPids[$k] -Force -ErrorAction SilentlyContinue
-                    $ActorPids.Remove($k)
-                }
-            }
-            $Actors = $newCount
+        foreach ($k in @($ActorPids.Keys)) {
+            Stop-Process -Id $ActorPids[$k] -Force -ErrorAction SilentlyContinue
+            if ($k -ge $newCount) { $ActorPids.Remove($k) }
         }
-        foreach ($apid in @($ActorPids.Values)) {
-            Stop-Process -Id $apid -Force -ErrorAction SilentlyContinue
-        }
-        Start-Sleep -Seconds 3
-        for ($i = 0; $i -lt $Actors; $i++) {
-            $ActorPids[$i] = Start-Actor $want $i
-            Start-Sleep -Seconds 2
-        }
+        $Actors = $newCount
         $appliedLevel = $want
+        Start-Sleep -Seconds 3
+        for ($i = 0; $i -lt $Actors; $i++) { Restart-Actor $i; Start-Sleep -Seconds 2 }
     }
 
-    # Check again before reviving anything: Stop-All kills the actors, so without
-    # this the daemon spends the next half minute restarting processes that were
-    # deliberately stopped, and only then reads the request.
     if (Test-Path $StopFile) { Write-Log 'stop requested'; Stop-All; break }
 
-    # keep both halves alive
-    if (-not (Get-Procs 'python.exe' '*learn.py*')) {
+    if (@(Get-MyLearners).Count -eq 0) {
         Write-Log 'learner died - restarting'
+        if (Test-Path $LearnLog) {
+            Get-Content $LearnLog -Tail 6 -ErrorAction SilentlyContinue | ForEach-Object { if ($_.Trim()) { Write-Log "    $_" } }
+        }
         Start-Learner
         Start-Sleep -Seconds 3
     }
-    # Checked per tracked pid. "is any srcds running" would be satisfied by the
-    # eval instance, and would hide a dead actor for as long as an eval lasts.
+
+    $gen = Get-Gen
+    $learning = ($gen -ne $lastGen)
+
     for ($i = 0; $i -lt $Actors; $i++) {
-        $alive = $false
-        if ($ActorPids.ContainsKey($i)) {
-            $alive = [bool](Get-Process -Id $ActorPids[$i] -ErrorAction SilentlyContinue)
-        }
+        $alive = $ActorPids.ContainsKey($i) -and $ActorPids[$i] -gt 0 -and
+                 [bool](Get-Process -Id $ActorPids[$i] -ErrorAction SilentlyContinue)
         if (-not $alive) {
-            Write-Log "actor $i died - restarting"
-            $ActorPids[$i] = Start-Actor $appliedLevel $i
+            Write-Log "server $i died - restarting"
+            Restart-Actor $i
+            continue
+        }
+        # A server stuck on an error box prints nothing while the rest keep training.
+        $f = Join-Path $SrcdsLogDir "csai_${Name}_a$i.log"
+        $len = if (Test-Path $f) { (Get-Item $f).Length } else { 0 }
+        if (-not $ActorLen.ContainsKey($i) -or $ActorLen[$i] -ne $len) {
+            $ActorLen[$i] = $len
+            $ActorSeen[$i] = Get-Date
+        } elseif ($learning -and ((Get-Date) - $ActorSeen[$i]).TotalSeconds -ge $SilentSeconds) {
+            Write-Log "server $i has been silent for ${SilentSeconds}s - restarting"
+            Restart-Actor $i
         }
     }
 
-    $gen = Get-Gen
-    if ($gen -gt $lastGen) {
+    if ($learning) {
         $lastGen = $gen
         $lastGenAt = Get-Date
         $stallWarned = $false
     } elseif (((Get-Date) - $lastGenAt).TotalSeconds -ge $StallSeconds) {
         $stalledFor = [int]((Get-Date) - $lastGenAt).TotalSeconds
-
         if (-not $stallWarned) {
             Write-Log "STALLED: no new generation for ${stalledFor}s (gen $gen)"
-
-            $outDir = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrikeddons\sourcemod\data\csai\out'
-            if (Test-Path $outDir) {
-                # a99 is an eval, whose batch never completes by design.
-                $orphans = @(Get-ChildItem $outDir -Filter 'a*_batch_*.bin' -ErrorAction SilentlyContinue |
-                             Where-Object { $_.Name -notlike 'a99_*' -and
-                                            -not (Test-Path ($_.FullName -replace '\.bin$', '.done')) -and
-                                            $_.LastWriteTime -lt (Get-Date).AddMinutes(-5) })
-                if ($orphans.Count -gt 2) {
-                    Write-Log "  $($orphans.Count) batch files have waited over five minutes for a .done"
-                    Write-Log '  marker. The actors are producing data the learner cannot see - look at'
-                    Write-Log '  Ep_OpenBatch and Train_WriteDoneMarker before anything else.'
-                }
-            }
+            $orphans = @(Get-ChildItem $OutDir -Filter 'a*_batch_*.bin' -ErrorAction SilentlyContinue |
+                         Where-Object { -not (Test-Path ([IO.Path]::ChangeExtension($_.FullName, '.done'))) -and
+                                        $_.LastWriteTime -lt (Get-Date).AddMinutes(-5) })
+            if ($orphans.Count -gt 2) { Write-Log "  $($orphans.Count) batch files have no .done marker after five minutes" }
             Write-Log '  last lines from the learner:'
-            foreach ($f in @((Join-Path $Root 'logs\learner.err.log'), (Join-Path $Root 'logs\learner.log'))) {
-                if (Test-Path $f) {
-                    Get-Content $f -Tail 6 -ErrorAction SilentlyContinue |
-                        ForEach-Object { if ($_.Trim()) { Write-Log "    $_" } }
-                }
+            if (Test-Path $LearnLog) {
+                Get-Content $LearnLog -Tail 6 -ErrorAction SilentlyContinue | ForEach-Object { if ($_.Trim()) { Write-Log "    $_" } }
             }
             $stallWarned = $true
         }
@@ -415,10 +354,7 @@ while ($true) {
             Start-Sleep -Seconds 5
             Start-Learner
             Start-Sleep -Seconds 3
-            for ($i = 0; $i -lt $Actors; $i++) {
-                $ActorPids[$i] = Start-Actor $appliedLevel $i
-                Start-Sleep -Seconds 2
-            }
+            for ($i = 0; $i -lt $Actors; $i++) { Restart-Actor $i; Start-Sleep -Seconds 2 }
             $lastGenAt = Get-Date
             $stallWarned = $false
         }
@@ -426,7 +362,6 @@ while ($true) {
 
     if (((Get-Date) - $lastReport).TotalSeconds -ge $ReportEvery) {
         Invoke-Report -Snapshot
-        Write-Log "report attempted - gen $gen"
         $lastReport = Get-Date
     }
 
@@ -437,7 +372,6 @@ while ($true) {
             $evalProc = Invoke-Eval
             $evalStartedAt = Get-Date
         }
-        Invoke-Report
         $lastEvalGen = $gen
     }
 }

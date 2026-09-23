@@ -21,7 +21,7 @@ DEFAULT_IN = os.path.join(DATA, r"out\surf_demise_bc.txt")
 DEFAULT_WEIGHTS = os.path.join(DATA, "weights.txt")
 
 def load(path):
-    """Returns (obs, actions, frameskip). The capture header carries the frameskip"""
+    """Returns (obs, actions, frameskip) from a capture file."""
     acts, obs = [], []
     frameskip = 2
     with open(path) as fh:

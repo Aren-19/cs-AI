@@ -236,21 +236,46 @@ roughly 1300 decisions after the opening. The time bonus reached it at 2%
 strength. Nothing asked the opening to be fast, only not to fall over.
 
 The curriculum that drove it promoted five times on finish rate alone while the
-median run got four seconds slower. It now tracks median time against a baseline
-and rolls back on 0.4 s of drift.
+median run got four seconds slower. The experiment is closed and the curriculum
+script removed.
+
+## Heavier time cost, lighter deviation cost
+
+Two attempts to buy back the 0.25 s gap by pricing time harder and the route
+looser. Deterministic eval, eight runs from the start:
+
+| checkpoint | finished | best | median |
+|---|---|---|---|
+| gen 8858 | 8/8 | 39.46 s | 39.61 s |
+| gen 13226 | 8/8 | 39.32 s | 39.44 s |
+| gen 14349 | 6/8 | 39.29 s | 39.41 s |
+| gen 14754, time cost 0.40, deviation cost 0.05 | 8/8 | 39.43 s | 39.55 s |
+
+Both were worse. Settings are back to time cost 0.08 and deviation cost 0.5, and
+training resumed from gen 13226, the best checkpoint that finishes every run.
+
+## Reward timing
+
+The plugin reads the bot's position before each tick's movement, so a tick's
+progress is the result of the previous tick's input. It was being credited after
+the decision boundary, which handed every decision one tick of its predecessor's
+progress. Progress and deviation are now charged before the boundary, and finish,
+fall and stuck checks run on the state before the next input is applied. Reported
+times are one tick (0.015 s) shorter as a result; the table above was measured
+this way.
 
 ## Where it stands
 
 | | bot | reference |
 |---|---|---|
 | runs that finish | 8 of 8 | - |
-| best time | 39.34 s | 39.04 s |
-| median time | 39.48 s | - |
+| best time | 39.32 s | 39.04 s |
+| median time | 39.44 s | - |
 | strafe key changes | 0.76 per second | 1.05 per second |
 | time at a usable strafe angle | 98.1% | 97.8% |
 | median speed | 3603 units/s | 3589 units/s |
 
-Technique matches the reference run. The remaining gap is about three tenths of a
+Technique matches the reference run. The remaining gap is under three tenths of a
 second, spread evenly across the map rather than lost at any one point.
 
 ## Standing lessons

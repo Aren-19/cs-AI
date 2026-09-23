@@ -1,5 +1,8 @@
 """Policy and value networks, PPO update, checkpoint and weight IO."""
 
+import os
+import time
+
 import numpy as np
 
 from rollout import OBS_DIM, N_ACTIONS
@@ -37,7 +40,6 @@ class Policy(object):
 
     def __init__(self, rng=None):
         rng = rng or np.random.default_rng(0)
-        # He init for ReLU layers...
         self.W1 = rng.normal(0, np.sqrt(2.0 / OBS_DIM), (H1, OBS_DIM))
         self.b1 = np.zeros(H1)
         self.W2 = rng.normal(0, np.sqrt(2.0 / H1), (H2, H1))
@@ -272,12 +274,10 @@ def write_weights(path, policy, gen):
         print("# gen %d dim %d actions %d total %d" % (gen, OBS_DIM, N_ACTIONS, POL_TOTAL), file=fh)
         for v in flat:
             print("%.7g" % v, file=fh)
-    import os
-    import time as _time
     for attempt in range(50):
         try:
             os.replace(tmp, path)
             return
         except PermissionError:
-            _time.sleep(0.05)
+            time.sleep(0.05)
     raise PermissionError("could not replace %s after 2.5s of retries" % path)

@@ -111,8 +111,8 @@ def replay_table():
     return rows
 
 def eval_runs(limit_bytes=4000000):
-    """Every eval run the server has logged, as (finished, fraction, seconds)."""
-    path = os.path.join(CSTRIKE, "console.log")
+    """Every eval run on record, as (gen, finished, fraction, seconds)."""
+    path = os.path.join(ROOT, "logs", "eval_main.log")
     out = []
     try:
         size = os.path.getsize(path)
@@ -351,6 +351,12 @@ def main():
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
         with io.open(os.path.join(args.out, "report_%s.md" % stamp), "w", encoding="utf-8") as fh:
             fh.write(text)
+        # Keep the last two days of snapshots.
+        for old in sorted(glob.glob(os.path.join(args.out, "report_*.md")))[:-576]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
 
     if args.do_print:
         print(text)

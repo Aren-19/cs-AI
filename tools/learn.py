@@ -16,6 +16,7 @@ CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\
 DATA    = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 OUTDIR  = os.path.join(DATA, "out")
 WEIGHTS = os.path.join(DATA, "weights.txt")
+TICK    = 0.015
 
 def find_next_batch(outdir, processed):
     """Oldest completed batch we have not consumed yet."""
@@ -52,8 +53,6 @@ def read_done(path):
     return info
 
 def main():
-    # stdout is block-buffered when redirected, which makes a backgrounded
-    # learner look hung for minutes at a time. Line-buffer it.
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except AttributeError:
@@ -69,46 +68,33 @@ def main():
     ap.add_argument("--log", default=os.path.join(os.path.dirname(__file__), "..", "data", "train_log.csv"))
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--vlr", type=float, default=1e-3)
-    ap.add_argument("--gamma", type=float, default=0.997,
-                    help="0.99 gives a 3.0s horizon at frameskip 2/66 tick, "
-                         "shorter than an episode; 0.997 gives ~10s")
+    ap.add_argument("--gamma", type=float, default=0.997, help="discount; 0.997 is ~10s at frameskip 2")
     ap.add_argument("--lam", type=float, default=0.95)
     ap.add_argument("--clip", type=float, default=0.2)
     ap.add_argument("--ent-final", dest="ent_final", type=float, default=None,
-                    help="anneal the entropy bonus linearly to this over --ent-anneal "
-                         "generations. Exploration is worth paying for while the policy "
-                         "still has somewhere to go; once it has converged on a route "
-                         "the same bonus is just noise in the execution. Measured at "
-                         "gen 8800: every run-to-run difference in finish time came "
-                         "from the opening, not from the sampling - the deterministic "
-                         "policy repeats a run tick for tick.")
+                    help="anneal the entropy bonus linearly to this")
     ap.add_argument("--ent-anneal", dest="ent_anneal", type=int, default=2000,
                     help="generations over which --ent reaches --ent-final")
-    ap.add_argument("--ent", type=float, default=0.003,
-                    help="0.01 kept entropy at 2.31 of a max 3.22 after 4.7M steps - the "
-                         "policy never committed to a line. Surf needs sustained precise "
-                         "control, so it needs less exploration pressure than the default.")
+    ap.add_argument("--ent", type=float, default=0.003, help="entropy bonus")
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--minibatch", type=int, default=4096)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--frameskip", type=int, default=2,
-                    help="the actors' decision rate, only used to turn a finishing "
-                         "episode's step count into seconds")
+    ap.add_argument("--frameskip", type=int, default=2, help="ticks per decision, for run times")
     ap.add_argument("--max-lag", dest="max_lag", type=int, default=12,
-                    help="drop batches produced by a policy this many generations "
-                         "behind. With sync on, one consumed batch unblocks every "
-                         "actor at once, so the queue grows and the oldest entries "
-                         "become far too off-policy for PPO's trust region to mean "
-                         "anything. 0 disables the check.")
+                    help="drop batches this many generations old; 0 keeps all")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--kl-ref", dest="kl_ref", type=float, default=0.03,
                     help="penalty on moving away from the anchor policy; 0 disables")
-    # Anchor against the best known policy, not the behaviour clone.
     ap.add_argument("--ref-ckpt", dest="ref_ckpt",
                     default=os.path.join(os.path.dirname(__file__), "..", "data", "ckpt_anchor.npz"))
     ap.add_argument("--keep", action="store_true", help="keep consumed batch files")
     ap.add_argument("--timeout", type=float, default=600.0, help="seconds to wait for a batch")
+    ap.add_argument("--out", help="write all output to this file instead of the console")
     args = ap.parse_args()
+
+    if args.out:
+        fh = open(args.out, "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = fh
 
     rng = np.random.default_rng(args.seed)
     track = Track(args.track)
@@ -126,7 +112,9 @@ def main():
     gen = 0
 
     if args.resume and os.path.exists(args.ckpt):
-        z = np.load(args.ckpt)
+        # Read and closed at once: an open handle stops Windows replacing the file.
+        with np.load(args.ckpt) as f:
+            z = {k: f[k] for k in f.files}
         for i, p in enumerate(policy.params()):
             if z["p%d" % i].shape != p.shape:
                 print("checkpoint %s does not fit this build: policy tensor %d is "
@@ -136,10 +124,10 @@ def main():
                 return 1
         for i, p in enumerate(value.params()):
             key = "v%d" % i
-            if key not in z.files:
+            if key not in z:
                 print("checkpoint %s is missing %s: it has %d value tensors, this "
-                      "build needs %d. The critic was written incompletely."
-                      % (args.ckpt, key, sum(k[0] == 'v' for k in z.files),
+                      "build needs %d."
+                      % (args.ckpt, key, sum(k[0] == 'v' for k in z),
                          len(value.params())))
                 return 1
             if z[key].shape != p.shape:
@@ -161,10 +149,10 @@ def main():
 
     ref_policy = None
     if args.kl_ref > 0.0 and os.path.exists(args.ref_ckpt):
-        z = np.load(args.ref_ckpt)
         ref_policy = Policy(np.random.default_rng(args.seed))
-        for i, p in enumerate(ref_policy.params()):
-            p[...] = z["p%d" % i]
+        with np.load(args.ref_ckpt) as z:
+            for i, p in enumerate(ref_policy.params()):
+                p[...] = z["p%d" % i]
         print("anchored to %s (kl_ref %.4f)" % (args.ref_ckpt, args.kl_ref))
     elif args.kl_ref > 0.0:
         print("no anchor at %s - running unanchored" % args.ref_ckpt)
@@ -224,8 +212,6 @@ def main():
         binp = os.path.join(args.outdir, stem + ".bin")
         donep = os.path.join(args.outdir, stem + ".done")
 
-        # the plugin closes the .bin before writing .done, but be defensive about
-        # a partially flushed file on a slow disk
         for _ in range(20):
             try:
                 eps = read_batch(binp)
@@ -239,7 +225,6 @@ def main():
 
         info = read_done(donep)
 
-        # Produced against a different centerline than the learner is using.
         batch_track = float(info.get("track_length", 0.0) or 0.0)
         if batch_track > 0.0 and abs(batch_track - track.length) > 1.0:
             print("skip %s: built against a track of %.1f units, this learner has "
@@ -267,8 +252,6 @@ def main():
                         pass
             continue
 
-        # Linear anneal from --ent to --ent-final, measured from the generation
-        # this learner started at, so a restart does not begin the schedule again.
         ent_now = args.ent
         if args.ent_final is not None and args.ent_anneal > 0:
             frac = min(max(gen - ent_gen0, 0) / float(args.ent_anneal), 1.0)
@@ -295,8 +278,6 @@ def main():
             done = np.zeros(ep.n)
             done[-1] = 1.0 if ep.terminal else 0.0
 
-            # cutoffs bootstrap from the last observed state; true
-            # terminals contribute nothing beyond the episode
             last_v = 0.0 if ep.terminal else float(v[-1])
             adv, ret = compute_gae(rew, v, done, last_value=last_v,
                                    gamma=args.gamma, lam=args.lam)
@@ -341,8 +322,8 @@ def main():
         best_prog = float(np.max(progs)) if progs else 0.0
         wall = time.time() - t_start
 
-        best_full = (min(fin0_steps) * args.frameskip / 66.67) if fin0_steps else 0.0
-        med_full = (float(np.median(fin0_steps)) * args.frameskip / 66.67) if fin0_steps else 0.0
+        best_full = (min(fin0_steps) * args.frameskip * TICK) if fin0_steps else 0.0
+        med_full = (float(np.median(fin0_steps)) * args.frameskip * TICK) if fin0_steps else 0.0
 
         print("gen %-4d %s | eps %3d steps %6d | ret %7.2f | gain %5.2f%% (best %5.2f%%) | "
               "fell %3d fin %2d to %2d stuck %3d | H %.3f kl %+.4f clip %.3f vl %.3f | full %d/%d %.2fs | H* %.4f | %.1fs upd %.2fs"
@@ -376,7 +357,6 @@ def main():
                 os.replace(tmp, args.ckpt)
                 break
             except PermissionError:
-                # Windows: something else has the file open for a moment.
                 time.sleep(0.1)
         else:
             print("could not move the checkpoint into place - it is still at %s" % tmp)

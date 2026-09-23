@@ -1,4 +1,4 @@
 @echo off
-rem Open the local replay viewer (starts it if needed).
+rem Opens the local replay viewer, starting it if needed.
 cd /d "%~dp0"
-start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0webun.ps1"
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0web\run.ps1"

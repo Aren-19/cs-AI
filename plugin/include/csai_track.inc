@@ -28,6 +28,7 @@ stock void Track_Load()
 	g_iTrackCount  = 0;
 	g_fTrackLength = 0.0;
 	g_iTrackHint   = -1;
+	g_bTrackTruncated = false;
 
 	char map[PLATFORM_MAX_PATH];
 	GetCurrentMap(map, sizeof(map));

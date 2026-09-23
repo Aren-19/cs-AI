@@ -1,51 +1,44 @@
 # Running it
 
-Run `CsAI.bat`. It opens a single window and starts training from it. Nothing
-else opens a console.
+Run `CsAI.bat`. The first time, it builds `CsAI.exe` next to it; after that
+either one opens the panel. The panel is the only window. Every game server,
+learner and supervisor runs on a separate, invisible desktop, so nothing else
+ever appears on screen.
 
 ```
-  training: running   power: high   game servers: 6
-  generation 10049   finishing 94% of runs   median run 39.52s   the time to beat is 39.05s
+  main: running, 6 server(s)   power high   gen 14754   finishing 100%   median 39.48s
+  windup: running, 2 server(s)   power low   gen 3120   mean return 880
 
-   what        pid     cpu    memory   window   doing
-   daemon      15132   1%     93 MB    none     supervisor
-   learner     18108   78%    109 MB   hidden   ppo update
-   actor 0     10156   96%    324 MB   hidden   collecting episodes
-   actor 1     18556   95%    323 MB   hidden   collecting episodes
+   what         slot     pid     cpu    memory   doing
+   supervisor   main     15132   1%     93 MB    keeps the slot running
+   learner      main     18108   78%    109 MB   updating the policy
+   server 0     main     10156   96%    324 MB   playing episodes
    ...
 
-   [start training] [stop training]   power: high
-   [show window]    [hide window]     [hide them all]
-   [replay viewer]  [report]          [open folder]
+   slot: [all]   [start] [stop]   power: [high]
+   [replay viewer] [report] [open folder]
 ```
 
-Training runs six game servers, a learner and a supervisor, each with its own
-console. All of them start hidden and the panel hides any that appear later, so
-the panel is the only window on screen. Selecting a row and pressing **show
-window**, or double-clicking the row, brings that console up; the same again
-hides it.
+Selecting a row shows that process's log in the lower half. The drop-down there
+picks any log directly.
 
-The lower half tails the logs. The drop-down selects which.
+Start and stop run in the background, so the panel never freezes. Stop ends the
+slot's supervisor, learner, servers and any evaluation in progress.
+
+Closing the panel while training runs asks first: **Yes** stops everything,
+**No** leaves it running in the background, **Cancel** keeps the panel open.
 
 ### Slots
 
-A slot is an independent training run: its own weights, batches, checkpoint, log
-and power level. `main` trains the bot to run the map; `windup` trains the
-opening.
+A slot is an independent training run: its own weights, batches, checkpoint, logs
+and power level. `main` trains the bot to run the map; `windup` trains it to build
+its own speed before the start.
 
 The slot drop-down picks what **start**, **stop** and the power level apply to.
-It defaults to **all**, which covers every slot - stopping one slot while another
-supervisor is still alive looks exactly like stop not working, because that
-supervisor restarts the game servers as fast as they are killed.
+It defaults to **all**.
 
-The status line names each slot and says what it is running, so there is no one
-word that hides a slot still going.
-
-A new slot is a file: drop its daemon arguments in `data/daemon_args_<name>.txt`
-and it appears in the drop-down.
-
-Closing the panel does not stop training. It continues in the background until
-**stop training** is pressed.
+A slot's settings are the daemon arguments in `data/daemon_args.txt` (main) or
+`data/daemon_args_<name>.txt`. A new file there is a new slot.
 
 ## Power levels
 
@@ -94,18 +87,17 @@ The newest bot run is at the top of Recent Times; select it, then **View
 Replay**. The first load of a map takes a few seconds while its geometry is
 cached.
 
-Training scores itself every few minutes and saves the furthest of those runs, so
-a recent replay is always available.
+Training scores itself every few minutes and saves the fastest finish of each
+evaluation, or the furthest run if none finished.
 
 ## How a run is put together
 
 Each episode is one continuous attempt at the whole map.
 
-1. **Prestrafe** - the recorded pre-timer inputs are replayed through real
-   physics. The policy cannot produce this: its action space is the air-strafe
-   angle with no forward movement, and that restriction is what made it
-   controllable. Letting the policy drive the wind-up was tried and measured
-   slower.
+1. **Prestrafe** - in the main slot the recorded pre-timer inputs are replayed
+   through real physics. The windup slot learns this part on its own: it winds up
+   on the ground, jumps inside the start zone, and strafes left and right down onto
+   the first ramp, with its turning speed and key changes held to human limits.
 2. **Handover** - the policy takes over at about 285 u/s. Nothing before this
    point is trained on; the progress baseline starts here.
 3. **The run** - the bot surfs until it finishes, falls, or stops advancing.
@@ -120,8 +112,7 @@ checkpoints spread along the route, which is easier to learn from but optimises
 "advance from anywhere" rather than "complete the map". A share of episodes do
 start mid-map, set by `-StateMix`.
 
-To change it, set `'+csai_states', '0'` in `tools/daemon.ps1` (1 = always the
-start, 0 = sample all checkpoints).
+To sample all checkpoints instead, set `'+csai_states', '0'` in `tools/daemon.ps1`.
 
 The end-to-end numbers are `runs_from_start`, `finished_from_start` and
 `median_full_run_s` in `data/train_log.csv`. Progress percentages in older entries
@@ -145,11 +136,7 @@ weights are, and those start from scratch.
 python tools/setup_map.py surf_dune --check
 ```
 
-Then train:
-
-```bash
-.\tools\daemon.ps1 -Power high -Map surf_dune
-```
+Then set `-Map surf_dune` in `data/daemon_args.txt` and press **start**.
 
 On maps with stages, failed attempts that reset to a stage start are detected and
 dropped, and the teleport between stages is not counted as distance travelled.
@@ -239,20 +226,19 @@ which finish time alone does not.
 
 ## Logs
 
-- `logs/daemon.log` - starts, stops, power changes, crashes, restarts. The panel
-  tails it live.
-- `logs/learner.log` and `logs/learner.err.log` - the learner's own output.
+- `logs/daemon.log`, `logs/daemon_<slot>.log` - starts, stops, power changes,
+  crashes and restarts.
+- `logs/learner.log`, `logs/learner_<slot>.log` - the learner's output.
+- `logs/eval_<slot>.log` - every evaluation.
+- `cstrike/logs/csai_<slot>_a<N>.log` - each game server's console.
 - `data/train_log.csv` - one row per generation.
 - `docs/experiments.md` - each configuration change and whether it worked.
 
 ## If something looks wrong
 
-The daemon restarts the learner or any actor that dies, and logs it. It also
-restarts everything if no generation completes for long enough, and reports when
-batch files are piling up unread, which means actors are producing data the
-learner cannot see.
-
-`bash tools/watch.sh` prints a one-line health check and exits non-zero on a
-problem.
+The supervisor restarts the learner or any server that dies, and any server that
+goes quiet for ten minutes while the others keep working. It restarts everything
+if no generation completes for long enough, and reports when batch files pile up
+unread.
 
 Training and the viewer are independent; stopping one does not affect the other.

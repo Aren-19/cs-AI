@@ -21,28 +21,29 @@ The bot finishes the map. Eight runs from the start, one per recorded opening:
 | | bot | reference |
 |---|---|---|
 | runs that finish | 8 of 8 | - |
-| best time | 39.34 s | 39.04 s |
-| median time | 39.48 s | - |
+| best time | 39.32 s | 39.04 s |
+| median time | 39.44 s | - |
 | strafe key changes | 0.76 per second | 1.05 per second |
 | time at a usable strafe angle | 98.1% | 97.8% |
 | median speed | 3603 units/s | 3589 units/s |
 
-Technique matches the reference run and the remaining gap is about three tenths
+Technique matches the reference run and the remaining gap is under three tenths
 of a second, spread evenly across the map rather than lost at any one point.
 
 ## Running
 
-Run `CsAI.bat`. It opens a single window that starts and stops training, sets how
-much of the machine to use, lists every process with its state, and opens replays
-and reports.
+Run `CsAI.bat`. The first time it builds `CsAI.exe`, which opens the panel with
+no console at all; either works after that.
 
-Training runs several game servers alongside a learner. All of them start with
-their console hidden, so the panel is the only window on screen. Double-clicking
-a row shows that console; double-clicking again hides it.
+The panel is the one window. It starts and stops training, sets how much of the
+machine to use, lists every process with its log, and opens replays and reports.
+Game servers, learners and supervisors all run on a separate desktop that is never
+shown, so nothing else pops up.
 
-Closing the panel does not stop training.
+Closing the panel while training runs asks whether to stop it.
 
-`Viewer.bat` opens a 3D replay viewer in the browser.
+`Viewer.bat`, or **replay viewer** in the panel, opens a 3D replay viewer in the
+browser.
 
 [HOWTO.md](HOWTO.md) covers day-to-day use in more detail.
 
@@ -74,8 +75,9 @@ rest. Measured on 12 logical cores:
 Each attempt is one run of the whole map.
 
 1. The recorded opening is replayed first. Building speed before the timer starts
-   is a separate skill; letting the bot learn that part was tried and measured
-   slower, so it replays the recording instead.
+   is a separate skill, trained on its own in the `windup` slot: wind up on the
+   ground, jump inside the start zone, and strafe down onto the first ramp at
+   human turning speeds.
 2. The bot takes over and surfs the rest.
 3. It scores on distance along the route, and on time if it reaches the end. That
    score feeds back into how it steers.
@@ -140,9 +142,10 @@ The 3D replay viewer is third-party. It is built on two repositories by offstyle
 - [offstyles/offstyles-web](https://github.com/offstyles/offstyles-web) - the site
 - [offstyles/replay-viewer](https://github.com/offstyles/replay-viewer) - the in-browser map and replay renderer
 
-Neither is included here. `web/run.ps1` fetches them on first use, and the only
-modifications point them at local files instead of the live site. These are listed
-in [web/README.md](web/README.md).
+Neither is included here. `web/run.ps1` fetches them at a fixed commit on first
+use and applies the small changes in `web/patches/`, which point them at local
+files instead of the live site. These are listed in
+[web/README.md](web/README.md).
 
 The renderer inside replay-viewer is a port of
 [noclip.website](https://github.com/magcius/noclip.website), which is MIT licensed.

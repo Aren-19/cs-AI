@@ -94,7 +94,6 @@ stock void Pre_Load()
 	PrintToServer("[CsAI] prestrafe: %d recorded ticks for %s", g_iPreCount, map);
 }
 
-/** Put the bot at the recorded start, stationary, ready to replay. */
 /** Load one of the recorded prestrafes into the active slot. */
 stock void Pre_Select(int which)
 {

@@ -42,8 +42,8 @@ int   g_iEpTickBudget  = 4000;
 int   g_iTrainStates   = 0;        // 0 = sample from all loaded states
 
 float g_fStateMix      = 0.0;      // share of episodes starting mid-map
-float g_fStateLo       = 0.68;     // window to sample those from, as time fraction
-float g_fStateHi       = 0.79;
+float g_fStateLo       = 0.61;     // window to sample those from, as track fraction
+float g_fStateHi       = 0.72;
 
 int   g_iEpOutcome     = EP_RUNNING;
 int   g_iEpTick        = 0;
@@ -88,15 +88,13 @@ float g_fEpWishAngle = 90.0;   // = side * (90 + trim)
 bool  g_bEpGround   = false;
 int   g_iEpPreTicks = 0;
 
-#define PRE_TRIM_SCALE 20.0
-
 // Wind-up episodes: the bot builds its own ground speed instead of replaying a
 // recording. Scored on the state it hands over, one second away, rather than on
 // a finish forty seconds away.
 int   g_iWindupTicks   = 0;      // 0 = off; otherwise the length of a wind-up episode
 float g_fWindupYawCap  = 3.5;    // degrees of view movement per tick
 int   g_iWindupHold    = 12;     // ticks a strafe direction must be held
-float g_fWindupPosCost = 0.05;   // per unit away from the handover point
+float g_fWindupPosCost = 0.05;   // per unit off the line at ramp contact
 
 // Measured on the recorded wind-up: the view moves 0.53 deg/tick median and
 // 3.06 at its fastest, and a strafe direction is held 16 to 41 ticks. The caps
@@ -107,7 +105,8 @@ int   g_iWindupHeld    = 0;      // ticks the current side has been held
 int   g_iWindupSide    = 1;
 float g_fWindupPrevVz  = 0.0;
 bool  g_bWindupFlew    = false;   // has left the ground at least once
-int   g_iEpSide = 1;           // sticky: only action 1 changes it
+ConVar g_cvGravity     = null;
+int   g_iEpSide = 1;           // strafe side of the decision in flight
 int   g_iEpTrim = 0;
 
 int   g_iBatchEpisodes = 0;
@@ -131,6 +130,20 @@ stock void Ep_Init()
 
 stock void Ep_OpenBatch()
 {
+	delete g_hBatchFile;
+	g_bBatchBroken = false;
+	g_iBatchEpisodes = 0;
+	g_fStatReturnSum = 0.0;
+	g_fStatProgSum   = 0.0;
+	g_iStatMidStart  = 0;
+	g_iStatFell = 0;
+	g_iStatFinished = 0;
+	g_iStatTimeout = 0;
+
+	// An eval writes a replay, not training data.
+	if (g_bEval)
+		return;
+
 	char dir[PLATFORM_MAX_PATH];
 	if (g_sSlot[0] == '\0')
 		BuildPath(Path_SM, dir, sizeof(dir), "data/csai/out");
@@ -142,28 +155,12 @@ stock void Ep_OpenBatch()
 	char path[PLATFORM_MAX_PATH];
 	Format(path, sizeof(path), "%s/a%d_batch_%04d.bin", dir, g_iActorId, g_iBatchIndex);
 
-	delete g_hBatchFile;
 	g_hBatchFile = OpenFile(path, "wb");
-
 	if (g_hBatchFile == null)
 	{
 		PrintToServer("[CsAI] could not open batch file %s", path);
-		// Train_WriteDoneMarker would otherwise announce N episodes with no
-		// data behind them.
-		g_bBatchBroken = true;
+		g_bBatchBroken = true;      // no .done marker for a batch with no data
 	}
-	else
-	{
-		g_bBatchBroken = false;
-	}
-
-	g_iBatchEpisodes = 0;
-	g_fStatReturnSum = 0.0;
-	g_fStatProgSum   = 0.0;
-	g_iStatMidStart  = 0;
-	g_iStatFell = 0;
-	g_iStatFinished = 0;
-	g_iStatTimeout = 0;
 }
 
 stock int Ep_PickStartState()
@@ -311,8 +308,7 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 		movement[0] = 450.0;
 		movement[1] = useLeft ? -450.0 : 450.0;
 		movement[2] = 0.0;
-		// No jump: bunnyhopping through a wind-up throws away the ground speed
-		// it exists to build.
+		// Jump only when the policy coasts.
 		buttons = (useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_FORWARD;
 		if (wantJump)
 			buttons |= IN_JUMP;
@@ -556,12 +552,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		Ep_Reset();                      // handover: the baseline starts here
 	}
 
-	// The wind-up phase is "standing on the ground", not a tick count. Once the
-	// bot leaves the ledge it is airborne and the ordinary air-strafe control
-	// takes over - which is the same skill the run itself needs, and which the
-	// policy already has. The recorded sequence is 88 ticks on the ground
-	// reaching 282 u/s, then 106 ticks falling and strafing to 466 u/s: the
-	// airborne half gains almost as much as the ground half.
+	// Wind-up: the ground phase lasts as long as the bot stands on the ground.
 	if (g_iWindupTicks > 0)
 		g_bEpGround = (GetEntityFlags(client) & FL_ONGROUND) != 0;
 	else
@@ -584,6 +575,22 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	{
 		g_iEpNoProgress++;
 	}
+
+	// This tick's position is the result of the decision in flight, so its
+	// progress and deviation are charged to that decision before a new one starts.
+	float dS = s - g_fEpLastS;
+	g_fEpLastS = s;
+	g_fEpStepReward += dS / 100.0;
+
+	if (g_fDeviationCost > 0.0 && g_fMaxDeviation > 0.0)
+	{
+		float off = dist / g_fMaxDeviation;
+		if (off > 1.0) off = 1.0;
+		g_fEpStepReward -= g_fDeviationCost * off * off;
+	}
+
+	if (Ep_CheckEnd(client, s, dist, vel))
+		return false;
 
 	if ((g_iEpTick % g_iFrameSkip) == 0)
 	{
@@ -653,6 +660,10 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		while (g_fEpWishAngle < -180.0) g_fEpWishAngle += 360.0;
 		g_iEpSteps++;
 
+		// Ground time in a wind-up is off the clock: the timer starts on the jump.
+		if (!(g_iWindupTicks > 0 && g_bEpGround))
+			g_fEpStepReward -= g_fTimeCost;
+
 		g_fEpPendPos[0] = pos[0];
 		g_fEpPendPos[1] = pos[1];
 		g_fEpPendPos[2] = pos[2];
@@ -661,29 +672,9 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		g_fEpPendVel[2] = vel[2];
 	}
 
-	float dS = s - g_fEpLastS;
-	g_fEpLastS = s;
-	g_fEpStepReward += dS / 100.0;
-
-	// Every decision costs time.
-	// Winding up on the ground costs nothing. The timer starts as the player
-	// leaves - shavit's own replay marks the start at the last grounded tick,
-	// with the jump two ticks later - so a longer wind-up is free and only the
-	// airborne part is on the clock.
-	if ((g_iEpTick % g_iFrameSkip) == 0 && !(g_iWindupTicks > 0 && g_bEpGround))
-		g_fEpStepReward -= g_fTimeCost;
-
-	if (g_fDeviationCost > 0.0 && g_fMaxDeviation > 0.0)
-	{
-		float off = dist / g_fMaxDeviation;
-		if (off > 1.0) off = 1.0;
-		g_fEpStepReward -= g_fDeviationCost * off * off;
-	}
-
 	Ep_ApplyAction(vel, buttons, movement, angles);
 
-	// Capture the frame AFTER the action is decoded, so the recorded view angle
-	// is the one the bot actually used this tick.
+	// Captured after the action is decoded, so the view angle is the one used.
 	if (g_bEval)
 	{
 		Rec_Tick(client, buttons);
@@ -692,64 +683,55 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	}
 
 	g_iEpTick++;
+	return true;
+}
 
+/** Ends the episode if the current state is terminal. g_iEpTick ticks have run. */
+stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
+{
 	if (g_iWindupTicks > 0)
 	{
-		// A wind-up ends where it is meant to: riding the first ramp. On a surf
-		// ramp the player is not FL_ONGROUND, so contact is detected by the
-		// vertical acceleration departing from gravity - the surface pushing
-		// back. The tick count is only a backstop for a wind-up that never gets
-		// there.
+		// A wind-up ends on the first ramp. A surf ramp does not set FL_ONGROUND,
+		// so contact shows as vertical acceleration that is no longer gravity.
 		if (!g_bEpGround)
 			g_bWindupFlew = true;
+
+		if (g_cvGravity == null)
+			g_cvGravity = FindConVar("sv_gravity");
+		float gravity = (g_cvGravity != null) ? g_cvGravity.FloatValue : 800.0;
 
 		float dvz = (vel[2] - g_fWindupPrevVz) * (1.0 / GetTickInterval());
 		g_fWindupPrevVz = vel[2];
 
-		bool onRamp = (g_bWindupFlew && !g_bEpGround && vel[2] < -200.0
-		               && FloatAbs(dvz + 800.0) > 150.0);
+		bool onRamp = (g_bWindupFlew && !g_bEpGround && g_iEpTick > 1 && vel[2] < -200.0
+		               && FloatAbs(dvz + gravity) > 150.0);
 
 		if (onRamp || g_iEpTick >= g_iWindupTicks)
-		{
-			Ep_PushStep();
-			Ep_Finish(EP_WINDUP);
-			return false;
-		}
+			return Ep_End(EP_WINDUP);
 	}
 
 	float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
-	// A wind-up starts slow and on the ground, which is the exact signature this
-	// test calls stuck.
 	if (speed < 40.0 && (GetEntityFlags(client) & FL_ONGROUND) && !g_bEpGround)
 		g_iEpStuckTicks++;
 	else if (!g_bEpGround)
 		g_iEpStuckTicks = 0;
 
-	// Not on a truncated track: its "end" is wherever the point limit cut it off,
-	// so this test would award a completion bonus mid-map.
+	// A truncated track ends where the point limit cut it, not at the finish.
 	if (!g_bEpGround && !g_bTrackTruncated && g_fTrackLength > 0.0 && s >= g_fTrackLength - 96.0)
-	{
-		Ep_PushStep();
-		Ep_Finish(EP_FINISHED);
-		return false;
-	}
+		return Ep_End(EP_FINISHED);
 	if (!g_bEpGround && dist > g_fMaxDeviation)
-	{
-		Ep_PushStep();
-		Ep_Finish(EP_FELL);
-		return false;
-	}
+		return Ep_End(EP_FELL);
 	if (g_iEpStuckTicks > 120 || g_iEpNoProgress > g_iEpNoProgMax)
-	{
-		Ep_PushStep();
-		Ep_Finish(EP_STUCK);
-		return false;
-	}
+		return Ep_End(EP_STUCK);
 	if (g_iEpTick >= g_iEpTickBudget)
-	{
+		return Ep_End(EP_TIMEOUT);
+	return false;
+}
+
+stock bool Ep_End(int outcome)
+{
+	if (g_iEpSteps > 0)
 		Ep_PushStep();
-		Ep_Finish(EP_TIMEOUT);
-		return false;
-	}
+	Ep_Finish(outcome);
 	return true;
 }

@@ -13,7 +13,7 @@ DUMP = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\out\obsdump.txt")
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 
 def _map_name():
-    """Which map to verify. Was hardcoded, so checking parity on a new map meant"""
+    """Which map to verify: --map, else data/map.txt."""
     for i, a in enumerate(sys.argv):
         if a == "--map" and i + 1 < len(sys.argv):
             return sys.argv[i + 1]

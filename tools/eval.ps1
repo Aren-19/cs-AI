@@ -2,6 +2,8 @@ param(
     [int]$Runs       = 5,
     [double]$Timescale = 20,
     [string]$Map     = 'surf_demise',
+    [string]$Slot    = '',      # blank = main
+    [int]$Port       = 27600,
     [int]$Budget     = 6000,
     [double]$Deviation = 600,
     [int]$TimeoutSec = 600,
@@ -9,28 +11,19 @@ param(
     [int]$Greedy     = 1,
     [int]$PreLearn   = 0,
     [int]$Prestrafe  = 1,
-    [int]$Windup     = 0,   # >0 = wind-up episodes of this many ticks   # 0 = skip the recorded wind-up, teleport to state 0
-    [int]$FrameSkip  = 2,   # must match what the policy was trained with
+    [int]$Windup     = 0,       # >0 = wind-up episodes of this many ticks
+    [int]$FrameSkip  = 2,       # must match training
     [double]$DevCost = 0.5,
     [double]$SwitchCost = 0.15
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'hidden.ps1')
 
-$GameRoot = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source'
-$Srcds    = Join-Path $GameRoot 'srcds_win64.exe'
-$ConLog   = Join-Path $GameRoot 'cstrike\console.log'
-
-$startLen = 0
-if (Test-Path $ConLog) { $startLen = (Get-Item $ConLog).Length }
+$Root = Split-Path -Parent $PSScriptRoot
+$name = if ($Slot) { $Slot } else { 'main' }
 
 $a = @(
-    '-console', '-game', 'cstrike', '-maxplayers', '6',
-    # Actor 0 runs on 27015 (daemon.ps1 assigns 27015 + 10*id), so an eval
-    # launched while training is live was racing it for the socket.
-    '-port', '27600',
-    '+sv_lan', '1', '-insecure', '-condebug',
-    '+servercfgfile', 'server_66.cfg',
     '+map', $Map,
     '+csai_eval', $Runs,
     '+csai_evalgreedy', $Greedy,
@@ -48,24 +41,18 @@ $a = @(
     '+csai_bench_quit', '1',
     '+csai_bench_delay', '8'
 )
+if ($Slot) { $a += @('+csai_slot', $Slot) }
 
 $mode = if ($Greedy -ne 0) { 'greedy' } else { 'sampled' }
-Write-Host "==> eval $Map : $Runs $mode runs, frameskip $FrameSkip" -ForegroundColor Cyan
-$proc = Start-Process -FilePath $Srcds -ArgumentList $a -WorkingDirectory $GameRoot -PassThru -WindowStyle Hidden
-if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-    Write-Host '    timed out, killing' -ForegroundColor Yellow
-    try { $proc.Kill() } catch {}
-}
+Write-Host "==> eval $Map ($name): $Runs $mode runs, frameskip $FrameSkip" -ForegroundColor Cyan
+$log = Invoke-Srcds "csai_${name}_eval" $Port $a $TimeoutSec
 
-if (Test-Path $ConLog) {
-    $fs = [IO.File]::Open($ConLog, 'Open', 'Read', 'ReadWrite')
-    try {
-        if ($startLen -le $fs.Length) {
-            $null = $fs.Seek($startLen, 'Begin')
-        } else {
-            Write-Host '    note: console.log shrank since launch; output may include earlier runs' -ForegroundColor DarkYellow
-        }
-        $sr = New-Object IO.StreamReader($fs)
-        $sr.ReadToEnd() -split "`r?`n" | Where-Object { $_ -match 'eval|replay:' } | ForEach-Object { Write-Host $_ }
-    } finally { $fs.Close() }
+$lines = @($log -split "`r?`n" | Where-Object { $_ -match 'eval|replay:|wind-up:' })
+$lines | ForEach-Object { Write-Host $_ }
+
+# Kept across runs, for the report.
+$hist = Join-Path $Root "logs\eval_$name.log"
+New-Item -ItemType Directory -Force -Path (Split-Path $hist) | Out-Null
+if ($lines.Count) {
+    Add-Content -Path $hist -Value (@("# $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')") + $lines) -Encoding utf8
 }

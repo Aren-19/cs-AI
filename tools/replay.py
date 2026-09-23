@@ -155,7 +155,7 @@ def path_length(frames, tickrate=100.0):
     return total
 
 def segments(frames, tickrate=100.0, threshold=None):
-    """Split the run at teleports. Staged surf maps teleport the player between"""
+    """Split the run at teleports, which staged maps use between stages."""
     if not frames:
         return []
     if threshold is None:
@@ -170,7 +170,7 @@ def segments(frames, tickrate=100.0, threshold=None):
     return out
 
 def prune_failed_attempts(frames, segs, tol=64.0):
-    """When several segments begin at the same teleport destination, the player was"""
+    """Segments that begin at the same teleport destination are retries; keep the last."""
     kept = []
     for si, (a, b) in enumerate(segs):
         start_pos = frames[a].pos
@@ -235,7 +235,7 @@ def centerline(frames, spacing=64.0, jump=200.0):
     return pts, brk
 
 def checkpoints(frames, count=24, tickrate=100.0):
-    """Evenly spaced full states for the restart curriculum. Surf state is just"""
+    """Evenly spaced full states (position, angles, velocity) to restart from."""
     if len(frames) < 2:
         return []
     dt = 1.0 / tickrate if tickrate > 0 else 0.01

@@ -1,0 +1,2 @@
+web/patches/*.patch eol=lf
+*.bat eol=crlf

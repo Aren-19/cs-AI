@@ -132,12 +132,6 @@ stock bool Pol_Load(const char[] path)
 		if (k < POL_ACTIONS)                       { g_fB3[k] = s_fLoadBuf[i]; }
 	}
 
-	if (n != POL_TOTAL)
-	{
-		PrintToServer("[CsAI] weights: read %d floats, expected %d", n, POL_TOTAL);
-		return false;
-	}
-
 	g_bPolicyLoaded = true;
 	g_iPolicyGen = gen;
 	return true;

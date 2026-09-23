@@ -18,6 +18,7 @@ char  g_sStateMap[PLATFORM_MAX_PATH];
 void LoadStates()
 {
     g_iStateCount = 0;
+    g_fRefTime = 0.0;
 
     char map[PLATFORM_MAX_PATH];
     GetCurrentMap(map, sizeof(map));
@@ -101,6 +102,7 @@ void LoadStates()
                       g_fStateAngles[0][1],
                       g_fStateVel[0][0], g_fStateVel[0][1], g_fStateVel[0][2]);
     }
+    States_ResolveFractions();
 }
 
 bool ApplyState(int client, int idx)
@@ -149,6 +151,27 @@ public Action Cmd_States(int args)
 {
     LoadStates();
     return Plugin_Handled;
+}
+
+/** Track fraction of each start state. Needs the track loaded. */
+stock void States_ResolveFractions()
+{
+    if (g_iTrackCount == 0)
+        return;
+    for (int i = 0; i < g_iStateCount; i++)
+    {
+        int ti = Track_Nearest(g_fStateOrigin[i], -1);
+        if (ti < 0)
+            continue;
+        float closest[3], dist;
+        float s = Track_Project(g_fStateOrigin[i], ti, closest, dist);
+        if (g_fTrackLength > 0.0)
+            g_fStateFrac[i] = s / g_fTrackLength;
+    }
+    PrintToServer("[CsAI] checkpoints resolved against the track: %d states, %.1f%% to %.1f%%",
+                  g_iStateCount,
+                  (g_iStateCount > 0) ? g_fStateFrac[0] * 100.0 : 0.0,
+                  (g_iStateCount > 0) ? g_fStateFrac[g_iStateCount - 1] * 100.0 : 0.0);
 }
 
 stock bool ApplyStateQuiet(int client, int idx)

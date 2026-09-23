@@ -1,5 +1,11 @@
 @echo off
-rem CsAI control panel - double-click to open.
-rem Opens the panel and starts training from it. One window, no consoles.
+rem Opens the CsAI panel. The first run builds CsAI.exe, which opens it with no console at all.
 cd /d "%~dp0"
-start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0tools\panel_gui.ps1" -Start "main,windup"
+if not exist "%~dp0CsAI.exe" (
+    "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /out:"%~dp0CsAI.exe" "%~dp0tools\launcher.cs" >nul 2>&1
+)
+if exist "%~dp0CsAI.exe" (
+    start "" "%~dp0CsAI.exe"
+) else (
+    start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0tools\panel_gui.ps1"
+)

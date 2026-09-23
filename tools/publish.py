@@ -24,7 +24,8 @@ def main():
         print("no such checkpoint: %s" % args.ckpt)
         return 1
     try:
-        z = np.load(args.ckpt)
+        with np.load(args.ckpt) as f:
+            z = {k: f[k] for k in f.files}
     except Exception as e:
         print("%s is not a readable checkpoint (%s)" % (args.ckpt, type(e).__name__))
         return 1

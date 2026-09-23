@@ -1,0 +1,92 @@
+diff --git a/package.json b/package.json
+index 2212b3a..c665b8f 100644
+--- a/package.json
++++ b/package.json
+@@ -14,9 +14,11 @@
+   },
+   "dependencies": {
+     "@headlessui/vue": "^1.7.23",
+-    "@offstyles/replay-viewer": "git+https://github.com/offstyles/replay-viewer.git#main",
++    "@offstyles/replay-viewer": "file:../replay-viewer",
+     "@tailwindcss/vite": "^4.1.11",
+     "gl-matrix": "^3.4.4",
++    "lzma1": "^0.3.0",
++    "pako": "^3.0.2",
+     "tailwindcss": "^4.1.11",
+     "vite-plugin-wasm": "^3.5.0",
+     "vue": "^3.5.13",
+@@ -36,5 +38,8 @@
+     "vite": "^6.2.4",
+     "vite-plugin-vue-devtools": "^7.7.2",
+     "vue-tsc": "^2.2.12"
++  },
++  "allowScripts": {
++    "esbuild@0.25.12": true
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/src/components/RecentTimes.vue b/src/components/RecentTimes.vue
+index 141fc04..213f511 100644
+--- a/src/components/RecentTimes.vue
++++ b/src/components/RecentTimes.vue
+@@ -26,6 +26,19 @@
+ 
+   const currentStyle: Ref<number> = ref(urlParams.getAsObject().style ? Number(urlParams.getAsObject().style) : Style.all);
+ 
++  // Order of the list. The API already accepts these names and the view already
++  // forwards them; this just exposes the choice, defaulting to newest first so
++  // the run you just made is at the top.
++  const currentSort: Ref<string> = ref(urlParams.getAsObject().sort || 'Newest');
++
++  const sortChanged = async (event: Event) => {
++    const value = (event.target as HTMLSelectElement).value;
++    currentSort.value = value;
++    const query = urlParams.update('sort', value);
++    delete query.page;      // a new order makes the old page number meaningless
++    await router.replace({ query });
++  };
++
+   const showStyleColumn = computed(() => currentStyle.value === Style.all);
+ 
+   const tableColumns = computed((): TimeListColumn[] => {
+@@ -159,6 +172,17 @@
+       <CustomDropdown :options="[Style.all, Style.normal, Style.sideways, Style.wonly, Style.legit_scroll, Style.half_sideways, Style.a_d_only, Style.segmented]"
+        :name="'style'" :format="styleFormat.name" :default="Style.all" @dropdown-Changed="dropdownChanged"></CustomDropdown>
+       <CheckboxInput @checkbox-Changed="dropdownChanged" :name="'wr'" :label="'Only show WR times'" :default="true"></CheckboxInput>
++      <select
++        :value="currentSort"
++        @change="sortChanged"
++        aria-label="Sort order"
++        class="bg-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 border border-gray-700 hover:border-gray-500 focus:outline-none focus:border-gray-400 cursor-pointer"
++      >
++        <option value="Newest">Newest first</option>
++        <option value="Oldest">Oldest first</option>
++        <option value="Fastest">Fastest first</option>
++        <option value="Slowest">Slowest first</option>
++      </select>
+     </div>
+     <TimesList v-if="props.recentTimes" :times="props.recentTimes" :cols="tableColumns"
+     @refresh-data="emit('updateRecentTimes')"
+diff --git a/vite.config.ts b/vite.config.ts
+index 4fe79d7..e038ccd 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -76,10 +76,15 @@ export default defineConfig({
+       allow: ['.', '../replay-viewer'],
+     },
+     proxy: {
++      // Local backend (tools/webserve.py). Upstream points at https://offstyles.net,
++      // whose API is closed and only knows their own replays - our bot's runs are
++      // not in it. '/maps' is proxied too so the BSP is read from the local CS:S
++      // install rather than a public FastDL mirror.
++      '/maps': { target: 'http://127.0.0.1:8787', changeOrigin: false },
+       '/api': {
+-        target: 'https://offstyles.net',
++        target: 'http://127.0.0.1:8787',
+         changeOrigin: true,
+-        secure: true,
++        secure: false,
+         cookieDomainRewrite: 'localhost',
+         configure: (proxy) => {
+           // Rewrite response cookies so they work on http://localhost

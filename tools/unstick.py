@@ -15,44 +15,36 @@ from ppo import Policy, Value, Adam, log_softmax, write_weights
 from rollout import Track, OBS_DIM, N_ACTIONS
 
 GAME = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source"
-SRCDS = os.path.join(GAME, "srcds_win64.exe")
 CSTRIKE = os.path.join(GAME, "cstrike")
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 OUT = os.path.join(DATA, "out")
-CONLOG = os.path.join(CSTRIKE, "console.log")
+HIDDEN = os.path.join(HERE, "hidden.ps1")
+CREATE_NO_WINDOW = 0x08000000
 
 N_TRIMS = (N_ACTIONS - 1) // 2          # the last action is coast
-PROBE_PORT = "27500"
+PROBE_PORT = "26800"
 PROBE_ACTOR = "9"
 
 # --------------------------------------------------------------- running ----
 
 def run_srcds(extra, timeout=600):
-    """Launch one headless run and return whatever it appended to console.log."""
-    start = os.path.getsize(CONLOG) if os.path.exists(CONLOG) else 0
-    args = ["-console", "-game", "cstrike", "-maxplayers", "6",
-            "+sv_lan", "1", "-insecure", "-condebug",
-            "-port", PROBE_PORT, "+csai_actor", PROBE_ACTOR,
-            "+servercfgfile", "server_66.cfg",
+    """Launch one windowless run and return its console output."""
+    args = ["+csai_actor", PROBE_ACTOR,
             "+csai_bench_timescale", "20", "+csai_bench_quit", "1",
             "+csai_bench_delay", "8"] + extra
-
     quoted = ",".join("'%s'" % a.replace("'", "''") for a in args)
-    ps = ("$p = Start-Process -FilePath '%s' -ArgumentList @(%s) "
-          "-WorkingDirectory '%s' -PassThru -WindowStyle Hidden; "
-          "$null = $p.WaitForExit(%d)" % (SRCDS, quoted, GAME, timeout * 1000))
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                   timeout=timeout + 60,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ps = (". '%s'; Invoke-Srcds 'csai_unstick' %s @(%s) %d"
+          % (HIDDEN, PROBE_PORT, quoted, timeout))
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                       timeout=timeout + 60, capture_output=True, text=True,
+                       creationflags=CREATE_NO_WINDOW)
     for junk in os.listdir(OUT):
         if junk.startswith("a%s_batch_" % PROBE_ACTOR):
             try:
                 os.remove(os.path.join(OUT, junk))
             except OSError:
                 pass
-    with open(CONLOG, "rb") as fh:
-        fh.seek(start)
-        return fh.read().decode("utf-8", "replace")
+    return r.stdout or ""
 
 def batch_run(map_name, frameskip, lo, hi, episodes=16, side=0, trim=-1,
               obsdump=0, budget=6000, deviation=600, devcost=0.5):

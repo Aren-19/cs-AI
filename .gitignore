@@ -1,20 +1,21 @@
 build/
-data/*.csv
-data/*.npz
 __pycache__/
 *.pyc
-web/*/node_modules/
-data/webcache/
-data/*.mesh
 logs/
 reports/
-data/power.txt
-data/daemon.stop
+CsAI.exe
 
-# Upstream clones - third-party, unlicensed, and they carry their own git history.
-# web/run.ps1 clones them on demand; see web/README.md.
+data/*.csv
+data/*.npz
+data/*.mesh
+data/*.prev
+data/webcache/
+data/map.txt
+data/power*.txt
+data/daemon*.stop
+data/.*_baseline_gen
+
+# Upstream clones: third-party, with their own git history. See web/README.md.
+web/*/node_modules/
 web/offstyles-web/
 web/replay-viewer/
-data/*.prev
-data/map.txt
-data/daemon_args.txt

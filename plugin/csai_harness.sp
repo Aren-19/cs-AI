@@ -168,34 +168,8 @@ public void OnMapStart()
     if (g_hPollTimer == null)
         g_hPollTimer = CreateTimer(0.25, Timer_TrainPoll, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
-    LoadStates();
-
-    if (g_fRefTime > 0.0)
-        PrintToServer("[CsAI] reward: a finish pays %.1f at the reference %.3fs, %.1f at 40.0s, %.1f at 42.0s, %.1f at 50.0s (a fall pays -1.0)",
-                      g_fFinishBonus, g_fRefTime,
-                      g_fFinishBonus * Pow(g_fRefTime / 40.0, g_fTimePower),
-                      g_fFinishBonus * Pow(g_fRefTime / 42.0, g_fTimePower),
-                      g_fFinishBonus * Pow(g_fRefTime / 50.0, g_fTimePower));
     Track_Load();
-
-    if (g_iTrackCount > 0)
-    {
-        for (int i = 0; i < g_iStateCount; i++)
-        {
-            // -1 = full scan: isolated points, and a map teleport outruns the window
-            int ti = Track_Nearest(g_fStateOrigin[i], -1);
-            if (ti < 0)
-                continue;
-            float closest[3], dist;
-            float s = Track_Project(g_fStateOrigin[i], ti, closest, dist);
-            if (g_fTrackLength > 0.0)
-                g_fStateFrac[i] = s / g_fTrackLength;
-        }
-        PrintToServer("[CsAI] checkpoints resolved against the track: %d states, %.1f%% to %.1f%%",
-                      g_iStateCount,
-                      (g_iStateCount > 0) ? g_fStateFrac[0] * 100.0 : 0.0,
-                      (g_iStateCount > 0) ? g_fStateFrac[g_iStateCount - 1] * 100.0 : 0.0);
-    }
+    LoadStates();
 
     Pre_Load();          // single-file fallback, if no recordings exist
     Demo_Load();
@@ -267,6 +241,11 @@ void ArmBenchmark()
 
     PrintToServer("[CsAI] reward: finish %.1f x (reference / time) ^ %.1f, never below %.1f",
                   g_fFinishBonus, g_fTimePower, g_fFinishFloor);
+    if (g_fRefTime > 0.0)
+        PrintToServer("[CsAI] reward: a finish pays %.1f at the reference %.3fs, %.1f at 40.0s, %.1f at 42.0s",
+                      g_fFinishBonus, g_fRefTime,
+                      g_fFinishBonus * Pow(g_fRefTime / 40.0, g_fTimePower),
+                      g_fFinishBonus * Pow(g_fRefTime / 42.0, g_fTimePower));
     PrintToServer("[CsAI] reward: timecost %.3f per decision, devcost %.2f, switchcost %.2f, trimcost %.2f",
                   g_fTimeCost, g_fDeviationCost, g_fSwitchCost, g_fTrimCost);
     if (g_iWindupTicks > 0)
@@ -1086,7 +1065,8 @@ public void Shavit_OnFinish(int client, int style, float time, int jumps, int st
 
 public Action Cmd_RecSave(int client, int args)
 {
-    Rec_Human_Track(client);
+    if (client > 0)
+        Rec_Human_Track(client);
     Rec_Human_Save(client);
     return Plugin_Handled;
 }

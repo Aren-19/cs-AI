@@ -14,7 +14,7 @@ int   g_iRecHumanBtn[REC_HUMAN_MAX];
 int  g_iRecHumanCount  = 0;
 int  g_iRecHumanPre    = -1;    // -1 = timer has not started yet
 int  g_iRecHumanClient = -1;
-bool g_bRecHumanOn     = true;  // recording is on by default; nothing to remember
+bool g_bRecHumanOn     = true;
 
 stock void Rec_Human_Reset()
 {
@@ -59,20 +59,7 @@ stock void Rec_Human_Tick(int client, int buttons, const float angles[3])
 		return;
 
 	if (g_iRecHumanPre < 0 && g_iRecHumanCount >= REC_PRE_TRIM)
-	{
-		int keep = REC_PRE_KEEP;
-		int from = g_iRecHumanCount - keep;
-		for (int i = 0; i < keep; i++)
-		{
-			g_fRecHumanPos[i][0] = g_fRecHumanPos[from + i][0];
-			g_fRecHumanPos[i][1] = g_fRecHumanPos[from + i][1];
-			g_fRecHumanPos[i][2] = g_fRecHumanPos[from + i][2];
-			g_fRecHumanAng[i][0] = g_fRecHumanAng[from + i][0];
-			g_fRecHumanAng[i][1] = g_fRecHumanAng[from + i][1];
-			g_iRecHumanBtn[i]    = g_iRecHumanBtn[from + i];
-		}
-		g_iRecHumanCount = keep;
-	}
+		Rec_Human_TrimPre();
 
 	if (g_iRecHumanCount >= REC_HUMAN_MAX)
 		return;

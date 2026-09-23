@@ -1,0 +1,30 @@
+diff --git a/src/ReplayViewerOverlay.vue b/src/ReplayViewerOverlay.vue
+index 63a9672..1d718a0 100644
+--- a/src/ReplayViewerOverlay.vue
++++ b/src/ReplayViewerOverlay.vue
+@@ -34,6 +34,14 @@ function reportLoadTimings() {
+ 
+ async function waitForNextPaint() {
+   await nextTick();
++  // Vendored: requestAnimationFrame does not fire while the document is hidden,
++  // so the original two-rAF wait deadlocks the whole load sequence if the tab is
++  // backgrounded - which is exactly when someone would switch away, since the
++  // map download takes a while. Fall back to a macrotask when hidden.
++  if (document.visibilityState === "hidden") {
++    await new Promise<void>((resolve) => setTimeout(resolve, 0));
++    return;
++  }
+   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+ }
+@@ -49,7 +57,9 @@ const props = defineProps<{
+ const emit = defineEmits(["close"]);
+ 
+ const apiBaseUrl = "/api";
+-const fastdlBaseUrl = "https://main.fastdl.me/maps";
++// Vendored change: serve the BSP from our own origin (proxied to the local
++// CS:S install) instead of a public FastDL mirror, so custom maps work offline.
++const fastdlBaseUrl = "/maps";
+ 
+ // State
+ const isLoading = ref(true);

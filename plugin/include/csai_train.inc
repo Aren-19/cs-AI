@@ -193,24 +193,52 @@ stock bool Train_Tick(int client, int &buttons, float movement[3], float angles[
 	}
 
 	if (!Ep_Tick(client, buttons, movement, angles))
-	{
-		g_iTrainStepsTotal += g_iEpSteps;
-
-		if (g_bEval)
-			Eval_EpisodeDone();
-		else if (g_iBatchEpisodes >= g_iBatchTarget)
-			Train_EndOfBatch();
-		else
-			Ep_Begin();
-	}
+		Train_AfterEpisode();
 	return true;
+}
+
+stock void Train_AfterEpisode()
+{
+	g_iTrainStepsTotal += g_iEpSteps;
+
+	if (g_bEval)
+		Eval_EpisodeDone();
+	else if (g_iBatchEpisodes >= g_iBatchTarget)
+		Train_EndOfBatch();
+	else
+		Ep_Begin();
+}
+
+/** A bot that dies or leaves mid-episode gets no more ticks, which would stall the actor. */
+stock void Train_CheckBot()
+{
+	if (g_iBot == -1 || !IsClientInGame(g_iBot))
+	{
+		PrintToServer("[CsAI] bot left mid-run - stopping");
+		Train_Stop();
+		if (g_bBenchArmed)
+			ServerCommand("quit");
+		return;
+	}
+	if (IsPlayerAlive(g_iBot))
+		return;
+
+	PrintToServer("[CsAI] bot died mid-run - respawning");
+	CS_RespawnPlayer(g_iBot);
+	Ep_End(EP_FELL);
+	Train_AfterEpisode();
 }
 
 /** Timer-driven: checks for new weights while the actor idles between batches. */
 stock void Train_Poll()
 {
-	if (!g_bTraining || !g_bTrainWaiting)
+	if (!g_bTraining)
 		return;
+	if (!g_bTrainWaiting)
+	{
+		Train_CheckBot();
+		return;
+	}
 
 	if (Train_TryLoadNewWeights())
 	{
@@ -274,12 +302,17 @@ stock void Eval_EpisodeDone()
 {
 	g_iEvalDone++;
 	float frac = (g_fTrackLength > 0.0) ? (g_fEpBestS / g_fTrackLength) : 0.0;
-	float secs = float(g_iEpTick) * GetTickInterval();
+	int ticks = g_iEpTick - g_iEpPreTicks;
+	float secs = float((ticks > 0) ? ticks : 0) * GetTickInterval();
+	bool finished = (g_iEpOutcome == EP_FINISHED);
 
-	// Keep the run that got furthest - that is the one worth watching.
+	// Keep the fastest finish, or failing that the run that got furthest.
+	bool keep = finished ? (g_iEvalFinish == 0 || secs < g_fEvalBestTime)
+	                     : (g_iEvalFinish == 0 && frac > g_fEvalBestFrac);
 	if (frac > g_fEvalBestFrac)
-	{
 		g_fEvalBestFrac = frac;
+	if (keep)
+	{
 		char tag[64];
 		Format(tag, sizeof(tag), "gen%d", g_iPolicyGen);
 		Rec_Stop();
@@ -287,27 +320,29 @@ stock void Eval_EpisodeDone()
 	}
 	Rec_Start();
 
-	// only a completed run has a meaningful time; the duration of a run that fell
-	// early is not a "best time"
-	if (g_iEpOutcome == EP_FINISHED)
+	if (finished)
 	{
 		g_iEvalFinish++;
 		if (g_fEvalBestTime <= 0.0 || secs < g_fEvalBestTime)
 			g_fEvalBestTime = secs;
 	}
 
+	char what[16];
+	switch (g_iEpOutcome)
+	{
+		case EP_FINISHED: what = "FINISHED";
+		case EP_FELL:     what = "fell";
+		case EP_WINDUP:   what = "wind-up";
+		case EP_TIMEOUT:  what = "timed out";
+		default:          what = "stuck";
+	}
 	PrintToServer("[CsAI]  eval run %d/%d: %s at %.1f%% in %.2fs",
-	              g_iEvalDone, g_iEvalDone + g_iEvalLeft - 1,
-	              (g_iEpOutcome == EP_FINISHED) ? "FINISHED" :
-	              ((g_iEpOutcome == EP_FELL) ? "fell" : "stopped"),
-	              frac * 100.0, secs);
+	              g_iEvalDone, g_iEvalDone + g_iEvalLeft - 1, what, frac * 100.0, secs);
 
 	g_iEvalLeft--;
 	if (g_iEvalLeft <= 0)
 	{
 		if (g_iEvalFinish > 0)
-			// g_fRefTime, not a literal: this said "human 39.10s" on every map,
-			// and surf_demise's own reference is 39.045.
 			PrintToServer("[CsAI] eval complete: %d/%d finished, best %.1f%% of track, best time %.2fs (human %.2fs)",
 			              g_iEvalFinish, g_iEvalDone, g_fEvalBestFrac * 100.0, g_fEvalBestTime, g_fRefTime);
 		else

@@ -4,7 +4,7 @@ param(
     [double]$Timescale = 80,
     [int]$BatchSize  = 32,
     [int]$FrameSkip  = 2,
-    [int]$States     = 1,       # 1 = always the map start (continuous run); 0 = all checkpoints
+    [int]$States     = 1,       # 1 = always the map start; 0 = all checkpoints
     [int]$Prestrafe  = 1,
     [double]$SwitchCost = 0.15,
     [int]$Budget     = 4000,
@@ -12,23 +12,15 @@ param(
     [int]$Seed       = 0,
     [int]$ObsDump    = 0,
     [string]$Map     = 'surf_demise',
+    [int]$Port       = 26900,
     [int]$TimeoutSec = 900,
     [switch]$Wait               # block until the server exits
 )
 
 $ErrorActionPreference = 'Stop'
-
-$GameRoot = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source'
-$Cstrike  = Join-Path $GameRoot 'cstrike'
-$Srcds    = Join-Path $GameRoot 'srcds_win64.exe'
-$ConLog   = Join-Path $Cstrike  'console.log'
-
-Remove-Item $ConLog -ErrorAction SilentlyContinue
+. (Join-Path $PSScriptRoot 'hidden.ps1')
 
 $a = @(
-    '-console', '-game', 'cstrike', '-maxplayers', '6',
-    '+sv_lan', '1', '-insecure', '-condebug',
-    '+servercfgfile', 'server_66.cfg',
     '+map', $Map,
     '+csai_train_batches', $Batches,
     '+csai_train_sync', $Sync,
@@ -47,13 +39,10 @@ $a = @(
 )
 
 Write-Host "==> $Map  batches=$Batches sync=$Sync timescale=$Timescale batch=$BatchSize" -ForegroundColor Cyan
-$proc = Start-Process -FilePath $Srcds -ArgumentList $a -WorkingDirectory $GameRoot -PassThru -WindowStyle Hidden
-Write-Host "    srcds pid $($proc.Id)"
-
 if ($Wait) {
-    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-        Write-Host '    timed out, killing' -ForegroundColor Yellow
-        try { $proc.Kill() } catch {}
-    }
-    Select-String -Path $ConLog -Pattern 'CsAI' | ForEach-Object { $_.Line }
+    $log = Invoke-Srcds 'csai_train' $Port $a $TimeoutSec
+    $log -split "`r?`n" | Where-Object { $_ -match 'CsAI' }
+} else {
+    $proc = Start-Srcds 'csai_train' $Port $a
+    Write-Host "    srcds pid $($proc.Id), output in cstrike\logs\csai_train.log"
 }

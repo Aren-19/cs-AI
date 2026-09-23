@@ -121,7 +121,7 @@ def list_replays():
     return out
 
 def bsp_bz2(map_name):
-    """The viewer fetches <map>.bsp.bz2 and decompresses in a worker. Compressing an"""
+    """Serves <map>.bsp.bz2, compressed once and cached."""
     safe = os.path.basename(map_name)
     src = os.path.join(MAPS_DIR, safe + ".bsp")
     if not os.path.isfile(src):

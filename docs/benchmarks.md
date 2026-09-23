@@ -81,12 +81,12 @@ Steering along the route is what the learned policy has to supply.
 
 ## Gotchas found the hard way
 
-1. **`host_timescale` needs `sv_cheats 1`, and shavit fights you for it.**
+1. **`host_timescale` needs `sv_cheats 1`, and shavit turns it back off.**
    `shavit-core` installs a change hook on `sv_cheats` that forces it back to 0
    (`shavit_core_disable_sv_cheats`, default 1, set in
    `cfg/sourcemod/plugin.shavit-core.cfg`). Both a direct `ConVar.SetInt` and a
    console `sv_cheats 1` get silently reverted. Issue
-   `shavit_core_disable_sv_cheats 0` first. Symptom if you miss it: timescale
+   `shavit_core_disable_sv_cheats 0` first. Symptom when missed: timescale
    reads back correctly but speedup stays exactly 1.00×.
 
 2. **CS:S round management freezes the bot.** A bot that reports
@@ -104,8 +104,8 @@ Steering along the route is what the learned policy has to supply.
    plugin instead (`GetCommandLineParamInt("+csai_bench_ticks", …)`).
 
 5. **`-console` with stdin redirected to `/dev/null` kills srcds.** It hits EOF
-   and shuts down, usually before your timers fire. Launch via `Start-Process`
-   so it gets a real console.
+   and shuts down, usually before the plugin's timers fire. It needs a real
+   console of its own.
 
 6. **`TeleportEntity` respects world geometry.** Lifting a bot to a point inside
    the ceiling appears to succeed (the immediate origin read-back matches) and
@@ -118,7 +118,7 @@ Steering along the route is what the learned policy has to supply.
    idles silently while the learner waits out its timeout - the run just stops,
    with no error. `SetupRound()` now unloads both plugins (runtime-only, reverts
    on restart), and `OnMapStart` aborts loudly if a map change happens anyway.
-   Symptom to recognise: `no states file for <some other map>` in console.log.
+   Symptom to recognise: `no states file for <some other map>` in the server log.
 
 8. **`Logarithm()` in SourcePawn defaults to base 10, not e.** Using it for a
    policy log-probability puts log10 values into PPO's importance ratio. Symptom:
@@ -128,4 +128,10 @@ Steering along the route is what the learned policy has to supply.
 
 9. **Don't pipe `spcomp` into another command in a shell `&&` chain.** The exit
    status becomes the *pipe's* last stage, so a failed compile still "succeeds"
-   and you deploy a stale binary. `tools/build.ps1` checks `$LASTEXITCODE`.
+   and a stale binary gets deployed. `tools/build.ps1` checks `$LASTEXITCODE`.
+
+10. **srcds cannot be hidden by the usual means.** `srcds_win64.exe` is a GUI
+   program that opens its own console, so a hidden window style or
+   `CreateNoWindow` does nothing. `tools/hidden.ps1` starts it on a separate
+   desktop that is never shown, and gives each server its own log with
+   `+con_logfile` (the `cstrike/logs` folder has to exist first).
