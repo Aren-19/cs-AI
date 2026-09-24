@@ -355,6 +355,16 @@ exactly what the server showed (the parity check covers it). The cost for leavin
 the line drops from 0.5 to 0.1, so a faster line of its own is no longer charged
 for being different.
 
+## Rollback off while relearning
+
+The rollback guard fired an hour into two-map training and threw away about 430
+generations. The best it went back to was an 8 of 8 scoring in a stretch where
+surf_demise scored anywhere from 1 to 8 of 8 while it relearned the new line, so
+it was chasing noise, and it judges the first map only, so it also discarded
+practice on surf_utopia_njv just as training runs began to finish there. The
+guard is off (`-Guard 0`) until the results settle; the best checkpoint per map
+is still kept.
+
 ## Where it stands
 
 | | bot | reference |
