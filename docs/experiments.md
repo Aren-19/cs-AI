@@ -324,6 +324,25 @@ First evaluation under the new clock: best 38.93 s, median about 38.97 s, with
 the bot leaving the zone 25 to 30 ticks after its jump against the reference's
 51. That gap is where the next gains are.
 
+## A new line, and a second map
+
+A new surf_demise record (38.265 s under the zone-exit timer) and a segmented run
+on surf_utopia_njv (55.335 s under the old rule, 54.675 s from leaving the zone).
+
+The policy that finished the old line 8 of 8 finished the new one 0 of 8, stalling
+around 35 to 64%. Put the old track back and it finished 4 of 4 again (best
+38.68 s). The two lines are mostly 50 to 200 units apart, and up to 680 near the
+end, which was enough: the policy steers by its offset and height relative to the
+reference line, so a different line reads as being out of position. It had
+learned the route as much as the skill.
+
+Two fixes before training on it. The old surf_demise track had points about 92
+units apart (an older build that ignored the requested 64), and the policy learned
+on that, so every track is now built at 92. And one policy now trains on both
+maps, with half the runs in the main slot starting at a random checkpoint
+anywhere up to 90% of the map, so every section of the new line and the new map
+gets practice at once.
+
 ## Where it stands
 
 | | bot | reference |

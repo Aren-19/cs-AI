@@ -12,7 +12,7 @@ sys.path.insert(0, HERE)
 CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 REPLAYBOT = os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot")
-MAPS = os.path.join(CSTRIKE, "maps")
+MAPS = (os.path.join(CSTRIKE, "maps"), os.path.join(CSTRIKE, "download", "maps"))
 SHAVIT_DB = os.path.join(CSTRIKE, r"addons\sourcemod\data\sqlite\shavit-local.sq3")
 
 ARTEFACTS = ("track", "states", "prestrafe", "demo")
@@ -54,11 +54,12 @@ def write_zone(map_name):
     return path
 
 def zone_touching(pos, zone):
-    """The player's hull (32 wide, 72 tall) still overlaps the zone box."""
+    """Inside the zone as shavit counts it: its trigger is the box shrunk by 16
+    sideways and 31 vertically, so the player's centre has to be in the box."""
     x0, y0, z0, x1, y1, z1 = zone
-    return (min(x0, x1) - 16 <= pos[0] <= max(x0, x1) + 16 and
-            min(y0, y1) - 16 <= pos[1] <= max(y0, y1) + 16 and
-            pos[2] < max(z0, z1) and pos[2] + 72 > min(z0, z1))
+    return (min(x0, x1) <= pos[0] <= max(x0, x1) and
+            min(y0, y1) <= pos[1] <= max(y0, y1) and
+            pos[2] < max(z0, z1) - 31 and pos[2] + 72 > min(z0, z1) + 31)
 
 def rezone_reference(map_name):
     """Re-time the reference run from leaving the start zone instead of from the jump.
@@ -97,6 +98,8 @@ def rezone_reference(map_name):
     base = header_value(p["states"], "jump_clean_time=") or header_value(p["states"], "clean_time=")
     if not base:
         return None
+    if exit_tick - pre <= 2:
+        return None                          # recorded under the zone-exit timer already
     new = base - (exit_tick - pre) / rate
     words = [w for w in head.split(" ") if not w.startswith(("clean_time=", "jump_clean_time="))]
     lines[0] = " ".join(words) + " clean_time=%.3f jump_clean_time=%.3f" % (new, base)
@@ -236,10 +239,9 @@ def check(map_name):
     rows.append(("start zone", "present" if os.path.isfile(zone) else
                  "missing - the wind-up hands over on takeoff only", False))
 
-    bsp = os.path.join(MAPS, "%s.bsp" % map_name)
-    rows.append(("map file", "present" if os.path.isfile(bsp) else "NOT INSTALLED",
-                 not os.path.isfile(bsp)))
-    ok = ok and os.path.isfile(bsp)
+    have_bsp = any(os.path.isfile(os.path.join(d, "%s.bsp" % map_name)) for d in MAPS)
+    rows.append(("map file", "present" if have_bsp else "NOT INSTALLED", not have_bsp))
+    ok = ok and have_bsp
     return ok, rows
 
 def report(map_name):
@@ -255,7 +257,8 @@ def main():
     ap.add_argument("--replay", default=None,
                     help="the recorded run to derive from; default is the timer's "
                          "replay for this map")
-    ap.add_argument("--spacing", type=float, default=64.0)
+    ap.add_argument("--spacing", type=float, default=92.0,
+                    help="track point spacing; the policy was trained at 92")
     ap.add_argument("--checkpoints", type=int, default=24)
     ap.add_argument("--check", action="store_true", help="validate; only refreshes the start zone and the reference time")
     args = ap.parse_args()
@@ -301,12 +304,8 @@ def main():
     if not ok:
         print("NOT ready - see the problems above")
         return 1
-    print("ready. Train it with:")
-    print("    .\\tools\\daemon.ps1 -Power high -Map %s" % args.map)
-    print()
-    print("The bot starts from scratch on a new map: the weights are per-map and")
-    print("there is nothing to carry over. More recorded runs of your own help it")
-    print("most - see HOWTO.md.")
+    print("ready. To train on it, add it to -Map in data/daemon_args.txt (and")
+    print("data/daemon_args_windup.txt), separated by a comma, and press start.")
     return 0
 
 if __name__ == "__main__":

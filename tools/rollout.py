@@ -11,7 +11,7 @@ import struct
 import numpy as np
 
 # must match csai_track.inc
-LOOK_OFFSETS   = (4, 8, 16, 32, 64, 128, 256)   # track points; 64 units apart
+LOOK_OFFSETS   = (4, 8, 16, 32, 64, 128, 256)   # track points; 92 units apart
 LOOKAHEAD      = len(LOOK_OFFSETS)
 PROBE_RAYS     = 8          # 5 down-facing, then left, right, forward
 PROBE_DIM      = PROBE_RAYS + 3

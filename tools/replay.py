@@ -288,7 +288,7 @@ def main():
     ap = argparse.ArgumentParser(description="Parse a shavit replay and derive training artefacts")
     ap.add_argument("path")
     ap.add_argument("--out", help="directory to write centerline.csv / checkpoints.json / frames.csv")
-    ap.add_argument("--spacing", type=float, default=64.0, help="centerline resample spacing in units")
+    ap.add_argument("--spacing", type=float, default=92.0, help="centerline resample spacing in units")
     ap.add_argument("--checkpoints", type=int, default=24, help="number of curriculum checkpoints")
     ap.add_argument("--states", help="write a flat states file here for the SourcePawn harness "
                                      "(one state per line; SourcePawn has no JSON parser)")

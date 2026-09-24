@@ -85,45 +85,72 @@ function Get-Power([string]$slot) {
     return 'high'
 }
 
-function Get-Progress([string]$slot) {
-    $log = Join-Path $Data "train_log$(Sfx $slot).csv"
-    if (-not (Test-Path $log)) { return '' }
-    try {
-        $head = (Get-Content $log -TotalCount 1) -split ','
-        $iGen = [array]::IndexOf($head, 'gen')
-        $iRun = [array]::IndexOf($head, 'runs_from_start')
-        $iFin = [array]::IndexOf($head, 'finished_from_start')
-        $iMed = [array]::IndexOf($head, 'median_full_run_s')
-        $iRet = [array]::IndexOf($head, 'mean_return')
-        if ($iGen -lt 0) { return '' }
-        $tail = @(Get-Content $log -Tail 40 -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^gen,' })
-        if ($tail.Count -lt 1) { return '' }
-        $gen = ($tail[-1] -split ',')[$iGen]
-        $runs = 0.0; $fin = 0.0; $med = 0.0; $medN = 0; $ret = 0.0; $retN = 0
-        foreach ($line in $tail) {
-            $c = $line.Split(',')
-            if ($iRet -ge 0 -and $c.Count -gt $iRet -and $c[$iRet]) { $ret += [double]$c[$iRet]; $retN++ }
-            if ($iRun -lt 0 -or $iMed -lt 0 -or $c.Count -le $iMed -or $c[$iRun] -eq '') { continue }
-            $runs += [double]$c[$iRun]; $fin += [double]$c[$iFin]
-            if ([double]$c[$iMed] -gt 0) { $med += [double]$c[$iMed]; $medN++ }
-        }
-        $s = "gen $gen"
-        if ($runs -gt 0 -and $fin -gt 0) {
-            $s += ('   finishing {0:N0}%' -f (100.0 * $fin / $runs))
-            if ($medN) { $s += ('   median {0:N2}s' -f ($med / $medN)) }
-        } elseif ($retN) {
-            $s += ('   mean score {0:N1}' -f ($ret / $retN))
-        }
-        return $s
-    } catch { return '' }
+function Get-SlotMaps([string]$slot) {
+    $file = Join-Path $Data "daemon_args$(Sfx $slot).txt"
+    $maps = @()
+    if (Test-Path $file) {
+        $t = @((Get-Content $file -Raw).Trim() -split '\s+')
+        $i = [array]::IndexOf($t, '-Map')
+        if ($i -ge 0 -and $i + 1 -lt $t.Count) { $maps = @($t[$i + 1] -split ',' | Where-Object { $_ }) }
+    }
+    if (-not $maps) { $maps = @('surf_demise') }
+    return $maps
 }
 
-function Get-Best([string]$slot) {
-    $f = Join-Path $Data "best$(Sfx $slot).txt"
+function Get-Best([string]$slot, [string]$map, [bool]$first) {
+    $tag = if ($first) { Sfx $slot } else { "$(Sfx $slot).$map" }
+    $f = Join-Path $Data "best$tag.txt"
     if (-not (Test-Path $f)) { return '' }
     $v = (Get-Content $f -Raw).Trim() -split '\s+'
     if ($v.Count -lt 4 -or [int]$v[1] -eq 0) { return '' }
-    return ('   best {0}/{1} at {2:N2}s (gen {3})' -f $v[1], $v[2], [double]$v[3], $v[0])
+    return (', best {0}/{1} at {2:N2}s' -f $v[1], $v[2], [double]$v[3])
+}
+
+# One summary per map: finish rate and median from the start, or the mean score.
+function Get-Progress([string]$slot) {
+    $maps = Get-SlotMaps $slot
+    $log = Join-Path $Data "train_log$(Sfx $slot).csv"
+    $out = ''
+    $stats = @{}
+    if (Test-Path $log) {
+        try {
+            $head = (Get-Content $log -TotalCount 1) -split ','
+            $iGen = [array]::IndexOf($head, 'gen')
+            $iRun = [array]::IndexOf($head, 'runs_from_start')
+            $iFin = [array]::IndexOf($head, 'finished_from_start')
+            $iMed = [array]::IndexOf($head, 'median_full_run_s')
+            $iRet = [array]::IndexOf($head, 'mean_return')
+            $iMap = [array]::IndexOf($head, 'map')
+            $tail = @(Get-Content $log -Tail 80 -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^gen,' })
+            if ($iGen -ge 0 -and $tail.Count) { $out = 'gen ' + ($tail[-1] -split ',')[$iGen] }
+            foreach ($line in $tail) {
+                $c = $line.Split(',')
+                $m = if ($iMap -ge 0 -and $c.Count -gt $iMap -and $c[$iMap]) { $c[$iMap] } else { $maps[0] }
+                if (-not $stats.ContainsKey($m)) { $stats[$m] = @{ Runs = 0.0; Fin = 0.0; Med = 0.0; MedN = 0; Ret = 0.0; RetN = 0 } }
+                $s = $stats[$m]
+                if ($iRet -ge 0 -and $c.Count -gt $iRet -and $c[$iRet]) { $s.Ret += [double]$c[$iRet]; $s.RetN++ }
+                if ($iRun -lt 0 -or $iMed -lt 0 -or $c.Count -le $iMed -or $c[$iRun] -eq '') { continue }
+                $s.Runs += [double]$c[$iRun]; $s.Fin += [double]$c[$iFin]
+                if ([double]$c[$iMed] -gt 0) { $s.Med += [double]$c[$iMed]; $s.MedN++ }
+            }
+        } catch {}
+    }
+    for ($k = 0; $k -lt $maps.Count; $k++) {
+        $m = $maps[$k]
+        $part = ($m -replace '^surf_', '') + ': '
+        $s = $stats[$m]
+        if ($s -and $s.Runs -gt 0 -and $s.Fin -gt 0) {
+            $part += ('finishing {0:N0}%' -f (100.0 * $s.Fin / $s.Runs))
+            if ($s.MedN) { $part += (', median {0:N2}s' -f ($s.Med / $s.MedN)) }
+        } elseif ($s -and $s.RetN) {
+            $part += ('mean score {0:N1}' -f ($s.Ret / $s.RetN))
+        } else {
+            $part += 'no runs yet'
+        }
+        $part += (Get-Best $slot $m ($k -eq 0))
+        $out += '   |   ' + $part
+    }
+    return $out
 }
 
 function Read-Tail([string]$path, [int]$n = 60) {
@@ -190,14 +217,14 @@ $form.MinimumSize = New-Object System.Drawing.Size(800, 520)
 
 $status = New-Object System.Windows.Forms.Label
 $status.Location = New-Object System.Drawing.Point(12, 10)
-$status.Size = New-Object System.Drawing.Size(920, 58)
+$status.Size = New-Object System.Drawing.Size(920, 90)
 $status.Font = New-Object System.Drawing.Font('Segoe UI', 10)
 $status.Anchor = 'Top,Left,Right'
 $form.Controls.Add($status)
 
 $list = New-Object System.Windows.Forms.ListView
-$list.Location = New-Object System.Drawing.Point(12, 72)
-$list.Size = New-Object System.Drawing.Size(680, 290)
+$list.Location = New-Object System.Drawing.Point(12, 104)
+$list.Size = New-Object System.Drawing.Size(680, 258)
 $list.View = 'Details'
 $list.FullRowSelect = $true
 $list.HideSelection = $false
@@ -231,29 +258,29 @@ function New-PanelLabel($text, $x, $y, $w) {
     return $l
 }
 
-[void](New-PanelLabel 'slot' 706 72 45)
+[void](New-PanelLabel 'slot' 706 104 45)
 $cmbSlot = New-Object System.Windows.Forms.ComboBox
-$cmbSlot.Location = New-Object System.Drawing.Point(753, 72)
+$cmbSlot.Location = New-Object System.Drawing.Point(753, 104)
 $cmbSlot.Size = New-Object System.Drawing.Size(179, 24)
 $cmbSlot.DropDownStyle = 'DropDownList'
 $cmbSlot.Anchor = 'Top,Right'
 $form.Controls.Add($cmbSlot)
 
-$bStart = New-PanelButton 'start' 706 104 110 32
-$bStop  = New-PanelButton 'stop'  822 104 110 32
+$bStart = New-PanelButton 'start' 706 136 110 32
+$bStop  = New-PanelButton 'stop'  822 136 110 32
 
-[void](New-PanelLabel 'power' 706 146 45)
+[void](New-PanelLabel 'power' 706 178 45)
 $cmbPow = New-Object System.Windows.Forms.ComboBox
-$cmbPow.Location = New-Object System.Drawing.Point(753, 146)
+$cmbPow.Location = New-Object System.Drawing.Point(753, 178)
 $cmbPow.Size = New-Object System.Drawing.Size(179, 24)
 $cmbPow.DropDownStyle = 'DropDownList'
 $cmbPow.Anchor = 'Top,Right'
 foreach ($l in @('idle', 'low', 'medium', 'high', 'max')) { [void]$cmbPow.Items.Add($l) }
 $form.Controls.Add($cmbPow)
 
-$bViewer = New-PanelButton 'replay viewer' 706 186 110 30
-$bReport = New-PanelButton 'report'        822 186 110 30
-$bFolder = New-PanelButton 'open folder'   706 222 226 28
+$bViewer = New-PanelButton 'replay viewer' 706 218 110 30
+$bReport = New-PanelButton 'report'        822 218 110 30
+$bFolder = New-PanelButton 'open folder'   706 254 226 28
 
 $hint = New-Object System.Windows.Forms.Label
 $hint.Text = 'pick a row to see its log'
@@ -365,8 +392,7 @@ function Update-Panel {
                  else { 'stopped' }
         $line = "{0}: {1}   power {2}" -f $sl, $state, (Get-Power $sl)
         $pg = Get-Progress $sl
-        if ($pg) { $line += "   $pg" }
-        $line += (Get-Best $sl)
+        if ($pg) { $line += "`r`n      " + ($pg -replace '^gen (\d+)   \|   ', 'gen $1:   ') }
         $lines += $line
     }
     $busy = Get-Busy

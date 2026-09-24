@@ -57,6 +57,9 @@ stock void Train_WriteDoneMarker()
 	if (f == null)
 		return;
 
+	char map[PLATFORM_MAX_PATH];
+	GetCurrentMap(map, sizeof(map));
+	f.WriteLine("map %s", map);
 	f.WriteLine("track_length %.1f", g_fTrackLength);
 	f.WriteLine("episodes %d", g_iBatchEpisodes);
 	f.WriteLine("gen %d", g_iPolicyGen);

@@ -14,11 +14,11 @@ part of this should be pointed at a public server.
 
 ## Status
 
-Map: surf_demise. Reference run: 38.28 seconds from leaving the start zone (39.04
-from the jump, the old timer rule), set by hand.
+Maps: surf_demise, reference run 38.27 s; surf_utopia_njv, reference run 54.67 s
+(both timed from leaving the start zone). Both set by hand.
 
-The bot finishes the map. Eight runs from the start, opened with recorded wind-ups
-(the bot's own wind-up is still training, see below):
+On the previous surf_demise line, eight runs from the start, opened with recorded
+wind-ups (training on the new line and on surf_utopia_njv has just started):
 
 | | bot | reference |
 |---|---|---|
@@ -106,14 +106,18 @@ well and looks nothing like surfing.
 
 ## Other maps
 
-Nothing in the bot is specific to a map. Given a recorded run:
+One policy trains on several maps at once. It currently trains on surf_demise and
+surf_utopia_njv (the second from a Segmented-style run: checkpoint loads leave no
+trace in the replay, so the line is clean). Given a recorded run:
 
 ```bash
-python tools/setup_map.py surf_dune
+python tools/setup_map.py surf_utopia_njv
 ```
 
-This derives the route, the restart points and the run to learn from. A new map
-starts from scratch.
+This derives the route, the restart points and the run to learn from, copies the
+start zone and times the reference from leaving it. Then add the map to `-Map`
+in `data/daemon_args.txt` and `data/daemon_args_windup.txt`, separated by commas.
+The servers are shared out between the maps and evaluations take turns.
 
 ## Adding recordings
 

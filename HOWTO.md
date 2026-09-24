@@ -142,14 +142,21 @@ python tools/setup_map.py surf_dune
 
 It locates the timer's replay for that map, derives the reference line, the
 restart checkpoints, the prestrafe and the run to clone from, then validates the
-result. Nothing about the bot is tied to a particular map; only the trained
-weights are, and those start from scratch.
+result. It also copies the start zone from the timer's database and times the
+reference run from leaving it. Maps found in `download/maps` count as installed.
 
 ```bash
 python tools/setup_map.py surf_dune --check
 ```
 
-Then set `-Map surf_dune` in `data/daemon_args.txt` and press **start**.
+Then add it to `-Map` in `data/daemon_args.txt` and `data/daemon_args_windup.txt`
+(`-Map surf_demise,surf_utopia_njv,surf_dune`) and press **start**. One policy
+learns all of them: each slot's servers are shared out between the maps, every
+batch says which map it came from, and evaluations take turns. The panel shows
+each map on its own line, and the best result is kept per map.
+
+Track points are 92 units apart on every map, because that is what the policy
+learned on. A track built at another spacing changes what it sees ahead.
 
 On maps with stages, failed attempts that reset to a stage start are detected and
 dropped, and the teleport between stages is not counted as distance travelled.

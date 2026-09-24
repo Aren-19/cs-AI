@@ -21,7 +21,7 @@ REPLAY_DIRS = [
     os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\0"),
     os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\7"),
 ]
-MAPS_DIR = os.path.join(CSTRIKE, "maps")
+MAPS_DIRS = (os.path.join(CSTRIKE, "maps"), os.path.join(CSTRIKE, "download", "maps"))
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "webcache")
 
 # The viewer is served from another port, so it is cross-origin and does need a
@@ -123,8 +123,8 @@ def list_replays():
 def bsp_bz2(map_name):
     """Serves <map>.bsp.bz2, compressed once and cached."""
     safe = os.path.basename(map_name)
-    src = os.path.join(MAPS_DIR, safe + ".bsp")
-    if not os.path.isfile(src):
+    src = next((p for p in (os.path.join(d, safe + ".bsp") for d in MAPS_DIRS) if os.path.isfile(p)), None)
+    if not src:
         return None
 
     os.makedirs(CACHE_DIR, exist_ok=True)

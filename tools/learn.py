@@ -62,6 +62,7 @@ def main():
     ap.add_argument("--batches", type=int, default=1000, help="batches to consume before stopping")
     ap.add_argument("--track", default=os.path.join(DATA, "surf_demise_track.txt"))
     ap.add_argument("--states", default=os.path.join(DATA, "surf_demise_states.txt"))
+    ap.add_argument("--data", default=DATA, help="where each map's track and states live")
     ap.add_argument("--outdir", default=OUTDIR)
     ap.add_argument("--weights", default=WEIGHTS)
     ap.add_argument("--ckpt", default=os.path.join(os.path.dirname(__file__), "..", "data", "ckpt.npz"))
@@ -97,13 +98,29 @@ def main():
         sys.stdout = sys.stderr = fh
 
     rng = np.random.default_rng(args.seed)
-    track = Track(args.track)
-    print("track: %d points, %.0f units" % (track.n, track.length))
+    # One track per map, loaded the first time a batch from that map arrives.
+    # Batches name their map; older ones without a name use --track.
+    maps = {}
 
-    state_s = load_state_arclengths(track, args.states)
-    print("start states: %d, arc lengths %.0f .. %.0f" %
-          (len(state_s), state_s.min() if len(state_s) else 0,
-           state_s.max() if len(state_s) else 0))
+    def map_data(name):
+        if name not in maps:
+            if name:
+                tpath = os.path.join(args.data, "%s_track.txt" % name)
+                spath = os.path.join(args.data, "%s_states.txt" % name)
+            else:
+                tpath, spath = args.track, args.states
+            if not os.path.isfile(tpath):
+                maps[name] = None
+                print("no track for map '%s' at %s" % (name, tpath))
+            else:
+                t = Track(tpath)
+                s = load_state_arclengths(t, spath) if os.path.isfile(spath) else np.zeros(0)
+                maps[name] = (t, s)
+                print("map %s: %d track points, %.0f units, %d start states"
+                      % (name or "(default)", t.n, t.length, len(s)))
+        return maps[name]
+
+    map_data("")
 
     policy = Policy(np.random.default_rng(args.seed))
     value = Value(np.random.default_rng(args.seed + 1))
@@ -159,7 +176,7 @@ def main():
 
     HEADER = ("gen,batch,episodes,steps,mean_return,mean_progress,best_progress,"
               "fell,finished,timeout,stuck,entropy,kl,clipfrac,val_loss,kl_ref,wall,"
-              "runs_from_start,finished_from_start,best_full_run_s,median_full_run_s")
+              "runs_from_start,finished_from_start,best_full_run_s,median_full_run_s,map")
 
     os.makedirs(os.path.dirname(os.path.abspath(args.log)), exist_ok=True)
     new_log = not os.path.exists(args.log)
@@ -224,6 +241,13 @@ def main():
             continue
 
         info = read_done(donep)
+
+        batch_map = info.get("map", "")
+        md = map_data(batch_map)
+        if md is None:
+            processed.add(batch_key)
+            continue
+        track, state_s = md
 
         batch_track = float(info.get("track_length", 0.0) or 0.0)
         if batch_track > 0.0 and abs(batch_track - track.length) > 1.0:
@@ -325,18 +349,18 @@ def main():
         best_full = (min(fin0_steps) * args.frameskip * TICK) if fin0_steps else 0.0
         med_full = (float(np.median(fin0_steps)) * args.frameskip * TICK) if fin0_steps else 0.0
 
-        print("gen %-4d %s | eps %3d steps %6d | ret %7.2f | gain %5.2f%% (best %5.2f%%) | "
+        print("gen %-4d %s %s | eps %3d steps %6d | ret %7.2f | gain %5.2f%% (best %5.2f%%) | "
               "fell %3d fin %2d to %2d stuck %3d | H %.3f kl %+.4f clip %.3f vl %.3f | full %d/%d %.2fs | H* %.4f | %.1fs upd %.2fs"
-              % (gen, stem, len(eps), obs.shape[0], mean_ret, mean_prog * 100, best_prog * 100,
+              % (gen, batch_map or "-", stem, len(eps), obs.shape[0], mean_ret, mean_prog * 100, best_prog * 100,
                  counts["fell"], counts["finished"], counts["timeout"], counts["stuck"],
                  stats["entropy"], stats["kl"], stats["clipfrac"], stats["val_loss"],
                  fin0, run0, med_full, ent_now, wall, time.time() - t0))
 
-        print("%d,%s,%d,%d,%.4f,%.5f,%.5f,%d,%d,%d,%d,%.4f,%.5f,%.4f,%.4f,%.5f,%.1f,%d,%d,%.3f,%.3f"
+        print("%d,%s,%d,%d,%.4f,%.5f,%.5f,%d,%d,%d,%d,%.4f,%.5f,%.4f,%.4f,%.5f,%.1f,%d,%d,%.3f,%.3f,%s"
               % (gen, stem, len(eps), obs.shape[0], mean_ret, mean_prog, best_prog,
                  counts["fell"], counts["finished"], counts["timeout"], counts["stuck"],
                  stats["entropy"], stats["kl"], stats["clipfrac"], stats["val_loss"],
-                 stats["kl_ref"], wall, run0, fin0, best_full, med_full),
+                 stats["kl_ref"], wall, run0, fin0, best_full, med_full, batch_map),
               file=logf)
         logf.flush()
 

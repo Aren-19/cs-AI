@@ -2,7 +2,7 @@ param(
     [ValidateSet('idle', 'low', 'medium', 'high', 'max')]
     [string]$Power = '',
     [int]$Actors    = 0,           # parallel servers; 0 = from the power level
-    [string]$Map    = '',          # blank = data/map.txt, else surf_demise
+    [string]$Map    = '',          # one map, or several separated by commas; blank = data/map.txt
     [string]$Slot   = '',          # blank = main; a name trains a second run alongside
     [int]$FrameSkip = 2,           # ticks per decision
     [double]$DevCost = 0.5,        # penalty for drifting off the reference line
@@ -66,6 +66,10 @@ if (-not $Map) {
     if (Test-Path $MapFile) { $Map = (Get-Content $MapFile -Raw).Trim([char]0xFEFF + " `t`r`n") }
     if (-not $Map) { $Map = 'surf_demise' }
 }
+# Several maps train one policy: the servers are shared out between them and
+# evaluations take turns. The first map is the one reports are about.
+$Maps = @($Map -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$Map = $Maps[0]
 if (-not $Slot) { Set-Content -Path $MapFile -Value $Map -Encoding ascii }
 
 $Levels = @{
@@ -141,7 +145,7 @@ function Start-Learner {
     $la = @((Join-Path $Root 'tools\learn.py'), '--batches', '1000000', '--timeout', '900',
             '--gamma', $Gamma, '--ent', $Entropy, '--frameskip', $FrameSkip,
             '--track', (Join-Path $Data "$($Map)_track.txt"),
-            '--states', (Join-Path $Data "$($Map)_states.txt"),
+            '--states', (Join-Path $Data "$($Map)_states.txt"), '--data', $Data,
             '--weights', $Weights, '--outdir', $OutDir,
             '--ckpt', $Ckpt, '--log', $TrainLog, '--out', $LearnLog)
     if ($EntFinal -gt 0.0) { $la += @('--ent-final', $EntFinal, '--ent-anneal', $EntAnneal) }
@@ -163,7 +167,7 @@ function Start-Actor([string]$level, [int]$id) {
     $a = @(
         '+csai_actor', $id,
         '+csai_seed', (([int]((Get-Date).Ticks % 100000)) * 32 + $id * 7919 + 1),
-        '+map', $Map,
+        '+map', $Maps[$id % $Maps.Count],
         '+csai_train_batches', '1000000', '+csai_train_sync', '1',
         '+csai_batch', $cfg.Batch, '+csai_frameskip', $FrameSkip,
         '+csai_states', '1', '+csai_budget', '6000', '+csai_deviation', '600',
@@ -194,10 +198,13 @@ function Invoke-Report([switch]$Snapshot) {
 }
 
 function Invoke-Eval {
-    Write-Log '  evaluating the policy (writes a replay)'
+    $m = $Maps[$script:EvalCount % $Maps.Count]
+    $script:EvalCount++
+    $script:EvalMap = $m
+    Write-Log "  evaluating the policy on $m (writes a replay)"
     # The checkpoint as it stands now, in case this eval turns out to be the best.
     try { Copy-Item $Ckpt $EvalCkpt -Force -ErrorAction Stop } catch { Remove-Item $EvalCkpt -ErrorAction SilentlyContinue }
-    $ea = @('-Runs', '8', '-Map', $Map, '-Greedy', '1', '-Port', $EvalPort,
+    $ea = @('-Runs', '8', '-Map', $m, '-Greedy', '1', '-Port', $EvalPort,
             '-FrameSkip', $FrameSkip, '-DevCost', $DevCost, '-Windup', $Windup,
             '-Partner', $Partner,
             '-Timescale', '20', '-TimeoutSec', '600')
@@ -269,6 +276,8 @@ $stallWarned = $false
 $stallRestarts = 0
 $badEvals = 0
 $rolledBack = $false
+$EvalCount = 0
+$EvalMap = $Map
 $lastEvalGen = $lastGen
 $lastReport = Get-Date
 $appliedLevel = $level
@@ -299,9 +308,15 @@ function Read-EvalResult {
     return [pscustomobject]@{ Gen = $gen; Runs = $runs; Finished = $times.Count; Median = $med }
 }
 
-function Read-Best {
-    if (-not (Test-Path $BestFile)) { return $null }
-    $f = (Get-Content $BestFile -Raw).Trim() -split '\s+'
+# The first map keeps the plain names; the others add the map to them.
+function Best-Paths([string]$m) {
+    $tag = if ($m -eq $Map) { $Sfx } else { "$Sfx.$m" }
+    return @((Join-Path $DataDir "best$tag.txt"), (Join-Path $DataDir "ckpt_best$tag.npz"))
+}
+
+function Read-Best([string]$file) {
+    if (-not (Test-Path $file)) { return $null }
+    $f = (Get-Content $file -Raw).Trim() -split '\s+'
     if ($f.Count -lt 4) { return $null }
     return [pscustomobject]@{ Gen = [int]$f[0]; Finished = [int]$f[1]; Runs = [int]$f[2]; Median = [double]$f[3] }
 }
@@ -311,19 +326,22 @@ function Read-Best {
 function Update-Best {
     $r = Read-EvalResult
     if (-not $r) { return }
-    $b = Read-Best
+    $m = $script:EvalMap
+    $bestFile, $bestCkpt = Best-Paths $m
+    $b = Read-Best $bestFile
     $line = "{0} {1} {2} {3:F3}" -f $r.Gen, $r.Finished, $r.Runs, $r.Median
-    Write-Log ("  eval gen {0}: {1}/{2} finished, median {3}" -f $r.Gen, $r.Finished, $r.Runs,
+    Write-Log ("  eval {0} gen {1}: {2}/{3} finished, median {4}" -f $m, $r.Gen, $r.Finished, $r.Runs,
                $(if ($r.Finished) { '{0:N2}s' -f $r.Median } else { '-' }))
     $better = (-not $b) -or ($r.Finished -gt $b.Finished) -or
               ($r.Finished -eq $b.Finished -and $r.Median -lt $b.Median - 0.001)
     if ($better -and (Test-Path $EvalCkpt)) {
-        Copy-Item $EvalCkpt $BestCkpt -Force
-        Set-Content -Path $BestFile -Value $line -Encoding ascii
-        Write-Log '  new best - checkpoint kept'
-        $script:badEvals = 0
+        Copy-Item $EvalCkpt $bestCkpt -Force
+        Set-Content -Path $bestFile -Value $line -Encoding ascii
+        Write-Log "  new best on $m - checkpoint kept"
+        if ($m -eq $Map) { $script:badEvals = 0 }
         return
     }
+    if ($m -ne $Map) { return }             # rolling back is judged on the first map only
     $worse = $b -and (($r.Finished -le $b.Finished - 2) -or ($r.Finished -gt 0 -and $b.Finished -gt 0 -and $r.Median -gt $b.Median + 0.25))
     $script:badEvals = if ($worse) { $script:badEvals + 1 } else { 0 }
     if ($Guard -gt 0 -and $script:badEvals -ge $Guard -and -not $script:rolledBack -and (Test-Path $BestCkpt)) {

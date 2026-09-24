@@ -56,5 +56,5 @@ $lines | ForEach-Object { Write-Host $_ }
 $hist = Join-Path $Root "logs\eval_$name.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $hist) | Out-Null
 if ($lines.Count) {
-    Add-Content -Path $hist -Value (@("# $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')") + $lines) -Encoding utf8
+    Add-Content -Path $hist -Value (@("# $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Map") + $lines) -Encoding utf8
 }
