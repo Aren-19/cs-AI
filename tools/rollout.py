@@ -28,6 +28,20 @@ OUTCOME_NAMES = {1: "fell", 2: "finished", 3: "timeout", 4: "stuck", 5: "windup"
 # rather than recomputed here.
 REC_FLOATS = 9 + PROBE_DIM + 1   # +1: held wish angle
 
+# Per-episode shift of the line shown to the policy (csai_track.inc g_fLineOff).
+LINE_PARAMS = 8
+NO_LINE_SHIFT = (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+HEADER_BYTES = 16 + 4 * LINE_PARAMS
+
+def line_offset(line, s):
+    """(sideways, up) shift of the shown line at arc length s."""
+    side, up = line[0], line[4]
+    if line[2] > 0.0:
+        side += line[1] * math.sin(2.0 * math.pi * s / line[2] + line[3])
+    if line[6] > 0.0:
+        up += line[5] * math.sin(2.0 * math.pi * s / line[6] + line[7])
+    return side, up
+
 class Track(object):
     """Centerline, mirroring csai_track.inc."""
 
@@ -98,7 +112,7 @@ class Track(object):
             return 0.0
         return math.degrees(math.atan2(self.y[b] - self.y[a], self.x[b] - self.x[a]))
 
-    def build_obs(self, pos, vel, idx):
+    def build_obs(self, pos, vel, idx, line=NO_LINE_SHIFT):
         obs = np.zeros(OBS_DIM, dtype=np.float64)
         if idx < 0 or self.n == 0:
             return obs
@@ -115,22 +129,25 @@ class Track(object):
         tx, ty = math.cos(tr), math.sin(tr)
         ox, oy = pos[0] - closest[0], pos[1] - closest[1]
         lateral = tx * oy - ty * ox
+        side, up = line_offset(line, s)
 
         obs[0] = speed / 1000.0
         obs[1] = vel[2] / 1000.0
         obs[2] = math.cos(d_yaw)
         obs[3] = math.sin(d_yaw)
-        obs[4] = lateral / 256.0
-        obs[5] = (pos[2] - closest[2]) / 256.0
+        obs[4] = (lateral - side) / 256.0
+        obs[5] = (pos[2] - closest[2] - up) / 256.0
         obs[6] = (s / self.length) if self.length > 0 else 0.0
 
         vr = math.radians(vel_yaw)
         cy, sy = math.cos(vr), math.sin(vr)
         for k, off in enumerate(LOOK_OFFSETS):
             j = min(idx + off, self.n - 1)
-            rx = self.x[j] - pos[0]
-            ry = self.y[j] - pos[1]
-            rz = self.z[j] - pos[2]
+            js, ju = line_offset(line, self.s[j])
+            jr = math.radians(self.tangent_yaw(j))
+            rx = self.x[j] - math.sin(jr) * js - pos[0]
+            ry = self.y[j] + math.cos(jr) * js - pos[1]
+            rz = self.z[j] + ju - pos[2]
             scale = off * 64.0                  # nominal arc distance
             o = 7 + k * 3
             obs[o + 0] = ( cy * rx + sy * ry) / scale
@@ -139,13 +156,14 @@ class Track(object):
         return obs
 
 class Episode(object):
-    __slots__ = ("outcome", "start_state", "best_s", "steps")
+    __slots__ = ("outcome", "start_state", "best_s", "steps", "line")
 
-    def __init__(self, outcome, start_state, best_s, steps):
+    def __init__(self, outcome, start_state, best_s, steps, line=NO_LINE_SHIFT):
         self.outcome = outcome
         self.start_state = start_state
         self.best_s = best_s
-        self.steps = steps            # (n, 9) float32
+        self.steps = steps            # (n, REC_FLOATS)
+        self.line = line
 
     @property
     def n(self):
@@ -165,10 +183,11 @@ def read_batch(path):
     episodes = []
     off = 0
     total = len(blob)
-    while off + 16 <= total:
+    while off + HEADER_BYTES <= total:
         n, outcome, start_state = struct.unpack_from("<iii", blob, off)
         best_s = struct.unpack_from("<f", blob, off + 12)[0]
-        off += 16
+        line = struct.unpack_from("<%df" % LINE_PARAMS, blob, off + 16)
+        off += HEADER_BYTES
         need = n * REC_FLOATS * 4
         if n < 0 or off + need > total:
             raise ValueError("truncated batch %s at offset %d (episode claims %d steps)"
@@ -176,7 +195,7 @@ def read_batch(path):
         steps = np.frombuffer(blob, dtype="<f4", count=n * REC_FLOATS, offset=off)
         steps = steps.reshape(n, REC_FLOATS).astype(np.float64)
         off += need
-        episodes.append(Episode(outcome, start_state, best_s, steps))
+        episodes.append(Episode(outcome, start_state, best_s, steps, line))
 
     if off != total:
         raise ValueError("trailing %d bytes in %s" % (total - off, os.path.basename(path)))
@@ -194,7 +213,7 @@ def episode_obs(track, ep):
         pos = ep.steps[i, 0:3]
         vel = ep.steps[i, 3:6]
         hint = track.nearest(pos, hint)
-        obs[i] = track.build_obs(pos, vel, hint)
+        obs[i] = track.build_obs(pos, vel, hint, ep.line)
         # splice in what the actor logged and this cannot recompute:
         # the collision probe, and the wish angle it was holding
         base = 7 + 3 * LOOKAHEAD

@@ -11,6 +11,7 @@ param(
     [double]$Deviation = 600,
     [int]$Seed       = 0,
     [int]$ObsDump    = 0,
+    [double]$LineJitter = 0,    # training: shift the line the policy sees by up to this many units
     [string]$Map     = 'surf_demise',
     [int]$Port       = 26900,
     [int]$TimeoutSec = 900,
@@ -33,6 +34,7 @@ $a = @(
     '+csai_deviation', $Deviation,
     '+csai_seed', $Seed,
     '+csai_obsdump', $ObsDump,
+    '+csai_linejitter', $LineJitter,
     '+csai_bench_timescale', $Timescale,
     '+csai_bench_quit', '1',
     '+csai_bench_delay', '8'

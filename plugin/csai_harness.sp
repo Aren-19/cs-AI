@@ -231,6 +231,7 @@ void ArmBenchmark()
     g_iWindupMax      = GetCommandLineParamInt("+csai_windupmax", g_iWindupMax);
     g_fJumpInset      = GetCommandLineParamFloat("+csai_jumpinset", g_fJumpInset);
     g_fStartSpeedCap  = GetCommandLineParamFloat("+csai_startcap", g_fStartSpeedCap);
+    g_fLineJitter     = GetCommandLineParamFloat("+csai_linejitter", g_fLineJitter);
     g_iWindupTicks    = GetCommandLineParamInt("+csai_windup", g_iWindupTicks);
     g_fWindupYawCap   = GetCommandLineParamFloat("+csai_windupyaw", g_fWindupYawCap);
     g_iWindupHold     = GetCommandLineParamInt("+csai_winduphold", g_iWindupHold);
@@ -1009,6 +1010,10 @@ public Action Cmd_ObsDump(int args)
         return Plugin_Handled;
     }
     g_iObsDump = n;
+    // The episode in progress already has its line; later ones write theirs on starting.
+    g_hObsDumpFile.WriteLine("# line %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f",
+                             g_fLineOff[0], g_fLineOff[1], g_fLineOff[2], g_fLineOff[3],
+                             g_fLineOff[4], g_fLineOff[5], g_fLineOff[6], g_fLineOff[7]);
     PrintToServer("[CsAI] dumping %d obs rows to %s", n, path);
     return Plugin_Handled;
 }

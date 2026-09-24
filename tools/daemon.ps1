@@ -21,6 +21,7 @@ param(
     [int]$Windup = 0,              # >0 = this slot trains the wind-up, up to this many ground ticks
     [string]$Partner = '',         # slot whose policy runs alongside: the wind-up for main, main for a wind-up
     [double]$LearnedMix = 0.0,     # main: share of runs from the start opened by the learned wind-up
+    [double]$LineJitter = 0.0,     # shift the line the policy sees by up to this many units, per episode
     [int]$StallSeconds = 240,      # no new generation for this long counts as a stall
     [int]$SilentSeconds = 600,     # a server quiet this long while others work is restarted
     [int]$EvalEvery = 40,          # generations between evaluations
@@ -175,7 +176,7 @@ function Start-Actor([string]$level, [int]$id) {
         '+csai_prestrafe', '1', '+csai_switchcost', $SwitchCost, '+csai_devcost', $DevCost,
         '+csai_timecost', $TimeCost, '+csai_trimcost', $TrimCost,
         '+csai_finishbonus', $FinishBonus, '+csai_finishfloor', $FinishFloor,
-        '+csai_windup', $Windup, '+csai_learnedmix', $LearnedMix,
+        '+csai_windup', $Windup, '+csai_learnedmix', $LearnedMix, '+csai_linejitter', $LineJitter,
         '+csai_bench_timescale', $cfg.Timescale,
         '+csai_bench_quit', '0', '+csai_bench_delay', '8'
     )

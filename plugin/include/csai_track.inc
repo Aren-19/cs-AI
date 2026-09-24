@@ -258,6 +258,32 @@ stock float Track_TangentYaw(int i)
 	return RadToDeg(ArcTangent2(g_fTrackY[b] - g_fTrackY[a], g_fTrackX[b] - g_fTrackX[a]));
 }
 
+// The line the policy sees can be shifted by a slow wave per episode, so it
+// learns to steer by the ramps rather than by the exact line it was shown:
+// sideways  g_fLineOff[0] + g_fLineOff[1] * sin(2 pi s / g_fLineOff[2] + g_fLineOff[3])
+// up/down   g_fLineOff[4] + g_fLineOff[5] * sin(2 pi s / g_fLineOff[6] + g_fLineOff[7])
+// Progress and rewards always use the real line.
+#define LINE_PARAMS 8
+float g_fLineOff[LINE_PARAMS];
+
+stock void Track_ClearLineOffset()
+{
+	for (int i = 0; i < LINE_PARAMS; i++)
+		g_fLineOff[i] = 0.0;
+	g_fLineOff[2] = 1.0;
+	g_fLineOff[6] = 1.0;
+}
+
+stock void Track_LineOffset(float s, float &side, float &up)
+{
+	side = g_fLineOff[0];
+	up   = g_fLineOff[4];
+	if (g_fLineOff[2] > 0.0)
+		side += g_fLineOff[1] * Sine(6.2831853 * s / g_fLineOff[2] + g_fLineOff[3]);
+	if (g_fLineOff[6] > 0.0)
+		up += g_fLineOff[5] * Sine(6.2831853 * s / g_fLineOff[6] + g_fLineOff[7]);
+}
+
 stock void Track_BuildObs(const float pos[3], const float vel[3], int idx, float obs[OBS_DIM])
 {
 	for (int i = 0; i < OBS_DIM; i++)
@@ -280,13 +306,15 @@ stock void Track_BuildObs(const float pos[3], const float vel[3], int idx, float
 	float tx = Cosine(tr), ty = Sine(tr);
 	float ox = pos[0] - closest[0], oy = pos[1] - closest[1];
 	float lateral = tx * oy - ty * ox;
+	float side, up;
+	Track_LineOffset(s, side, up);
 
 	obs[0] = speed / 1000.0;
 	obs[1] = vel[2] / 1000.0;
 	obs[2] = Cosine(dYaw);
 	obs[3] = Sine(dYaw);
-	obs[4] = lateral / 256.0;
-	obs[5] = (pos[2] - closest[2]) / 256.0;
+	obs[4] = (lateral - side) / 256.0;
+	obs[5] = (pos[2] - closest[2] - up) / 256.0;
 	obs[6] = (g_fTrackLength > 0.0) ? (s / g_fTrackLength) : 0.0;
 
 	// lookahead points, rotated into the velocity frame
@@ -299,9 +327,12 @@ stock void Track_BuildObs(const float pos[3], const float vel[3], int idx, float
 		if (j > g_iTrackCount - 1)
 			j = g_iTrackCount - 1;
 
-		float rx = g_fTrackX[j] - pos[0];
-		float ry = g_fTrackY[j] - pos[1];
-		float rz = g_fTrackZ[j] - pos[2];
+		float js, ju;
+		Track_LineOffset(g_fTrackS[j], js, ju);
+		float jr = DegToRad(Track_TangentYaw(j));
+		float rx = g_fTrackX[j] - Sine(jr) * js - pos[0];
+		float ry = g_fTrackY[j] + Cosine(jr) * js - pos[1];
+		float rz = g_fTrackZ[j] + ju - pos[2];
 
 		float scale = float(g_iLookOffsets[k]) * 64.0;   // nominal arc distance
 

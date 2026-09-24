@@ -86,6 +86,12 @@ Each attempt is one run of the whole map.
 3. It scores on distance along the route, and on time if it reaches the end. That
    score feeds back into how it steers.
 
+The line it is given is only a rough guide. In training it is shifted by a
+random slow wave every run, so the bot has to read the ramps around it (it
+measures the surfaces with short traces) instead of following one person's exact
+line, and leaving the line costs little. That is what lets it find its own,
+faster line rather than copying.
+
 The wind-up and the run are two policies trained side by side, in the `windup`
 and `main` slots. The wind-up is scored on the finish time of the whole run the
 surfing policy flies from its jump, so it learns the wind-up that sets up the

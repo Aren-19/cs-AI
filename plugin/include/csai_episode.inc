@@ -108,6 +108,7 @@ int   g_iEpClockTick   = 0;      // tick the timer started on: leaving the start
 int   g_iEpTakeoffTick = 0;      // tick the wind-up jumped
 bool  g_bEpClockOn     = false;
 float g_fStartSpeedCap = 475.0;  // combined speed kept on leaving the start zone, as on the server
+float g_fLineJitter    = 0.0;    // training: how far the line shown to the policy may be shifted sideways
 float g_fEpTakeoffSpeed = 0.0;
 
 // How a wind-up ended. Only a jump from well inside the start zone is the real
@@ -422,12 +423,14 @@ stock void Ep_Finish(int outcome)
 
 	if (g_hBatchFile != null)
 	{
-		int header[4];
+		int header[4 + LINE_PARAMS];
 		header[0] = n;
 		header[1] = outcome;
 		header[2] = g_iEpStartState;
 		header[3] = view_as<int>(g_fEpBestS);      // raw float bits
-		g_hBatchFile.Write(header, 4, 4);
+		for (int i = 0; i < LINE_PARAMS; i++)
+			header[4 + i] = view_as<int>(g_fLineOff[i]);
+		g_hBatchFile.Write(header, 4 + LINE_PARAMS, 4);
 
 		float row[EP_REC_FLOATS];
 		for (int i = 0; i < n; i++)
@@ -463,10 +466,33 @@ stock void Ep_WindupInit()
 	g_fWindupYaw = ang[1];
 }
 
+/** A random slow wave for the line the policy sees this episode; none in evals and wind-up training. */
+stock void Ep_PickLineOffset()
+{
+	Track_ClearLineOffset();
+	if (g_fLineJitter <= 0.0 || g_bEval || g_iWindupTicks > 0 || Pol_Rand() < 0.2)
+		return;
+	float a = g_fLineJitter;
+	g_fLineOff[0] = (Pol_Rand() - 0.5) * a;
+	g_fLineOff[1] = Pol_Rand() * a;
+	g_fLineOff[2] = 2000.0 + Pol_Rand() * 8000.0;
+	g_fLineOff[3] = Pol_Rand() * 6.2831853;
+	g_fLineOff[4] = (Pol_Rand() - 0.5) * a * 0.5;
+	g_fLineOff[5] = Pol_Rand() * a * 0.5;
+	g_fLineOff[6] = 2000.0 + Pol_Rand() * 8000.0;
+	g_fLineOff[7] = Pol_Rand() * 6.2831853;
+}
+
 stock void Ep_Begin()
 {
 	Ep_Init();
 	g_hEpBuf.Clear();
+	Ep_PickLineOffset();
+	// The parity check rebuilds the observation, so it needs the shift too.
+	if (g_iObsDump > 0 && g_hObsDumpFile != null)
+		g_hObsDumpFile.WriteLine("# line %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f",
+		                         g_fLineOff[0], g_fLineOff[1], g_fLineOff[2], g_fLineOff[3],
+		                         g_fLineOff[4], g_fLineOff[5], g_fLineOff[6], g_fLineOff[7]);
 
 	g_iEpStartState = Ep_PickStartState();
 	if (g_iEpStartState != 0)

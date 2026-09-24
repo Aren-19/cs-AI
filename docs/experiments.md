@@ -343,6 +343,18 @@ maps, with half the runs in the main slot starting at a random checkpoint
 anywhere up to 90% of the map, so every section of the new line and the new map
 gets practice at once.
 
+## Steering by the ramps, not the line
+
+Training on the new line only fixes this line. To stop the policy leaning on
+the exact line at all, every training run in the main slot now shows it a line
+shifted by a random slow wave: up to 300 units sideways and 150 up or down in
+total, over wavelengths of 2000 to 10000 units, with one run in five left
+unshifted. Progress and rewards still use the real line; evaluations and replays
+see the real line. The shift is stored with each episode so the learner rebuilds
+exactly what the server showed (the parity check covers it). The cost for leaving
+the line drops from 0.5 to 0.1, so a faster line of its own is no longer charged
+for being different.
+
 ## Where it stands
 
 | | bot | reference |

@@ -1,1 +1,1 @@
--Map surf_demise,surf_utopia_njv -Partner windup -LearnedMix 0.75 -FrameSkip 2 -StateMix 0.5 -StateLo 0.0 -StateHi 0.9 -Entropy 0.01 -EntFinal 0.002 -EntAnneal 3000 -TimeCost 0.08 -FinishBonus 50 -FinishFloor 0.5 -TrimCost 0.05 -SwitchCost 0.40 -DevCost 0.5
+-Map surf_demise,surf_utopia_njv -Partner windup -LearnedMix 0.75 -LineJitter 200 -FrameSkip 2 -StateMix 0.5 -StateLo 0.0 -StateHi 0.9 -Entropy 0.01 -EntFinal 0.002 -EntAnneal 3000 -TimeCost 0.08 -FinishBonus 50 -FinishFloor 0.5 -TrimCost 0.05 -SwitchCost 0.40 -DevCost 0.1
