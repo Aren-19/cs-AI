@@ -20,3 +20,4 @@ web/*/node_modules/
 web/offstyles-web/
 web/replay-viewer/
 data/best*.txt
+data/oldtrack_*
