@@ -14,7 +14,8 @@ part of this should be pointed at a public server.
 
 ## Status
 
-Map: surf_demise. Reference run: 39.04 seconds, set by hand.
+Map: surf_demise. Reference run: 38.28 seconds from leaving the start zone (39.04
+from the jump, the old timer rule), set by hand.
 
 The bot finishes the map. Eight runs from the start, opened with recorded wind-ups
 (the bot's own wind-up is still training, see below):
@@ -78,7 +79,8 @@ Each attempt is one run of the whole map.
 1. The bot winds up from standing. It holds forward and one strafe key at a time,
    turns its view no faster than a person does, and jumps from well inside the
    start zone, then strafes in the air before dropping off the ledge. The timer
-   starts on the jump, the same way the timer plugin starts it.
+   starts on leaving the start zone, with the combined speed capped at 475 u/s
+   there, as on KSF servers.
 2. From the jump, the surfing policy takes over and flies the rest of the map,
    strafing down onto the first ramp and on to the end.
 3. It scores on distance along the route, and on time if it reaches the end. That
@@ -125,6 +127,20 @@ counted as having fallen. `python tools/setup_map.py surf_demise --check` report
 which.
 
 [HOWTO.md](HOWTO.md) covers how to record them.
+
+## Timer rules
+
+The server's timer (shavit's bhoptimer) is set up the KSF way, and training
+follows the same rules:
+
+- The timer starts on leaving the start zone, not on the jump: the Normal style
+  has `startinair` 1, `nozaxisspeed` 0 and `maxprestrafe` 10000 in
+  `configs/shavit-styles.cfg`. Bunnyhopping inside the zone stays blocked.
+- `server/startzone-speedcap.sp` caps the combined (XYZ) speed at 475 u/s on
+  leaving the zone (`startzone_speedcap`).
+- Replays keep 4 seconds before the zone is left (`shavit_replay_preruntime`,
+  whose limit was raised from 2 to 10 in `shavit-replay-recorder.sp`), so the
+  replay bot shows the wind-up.
 
 ## Layout
 

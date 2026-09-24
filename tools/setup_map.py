@@ -53,6 +53,62 @@ def write_zone(map_name):
         fh.write("start %s\n" % " ".join("%.3f" % v for v in row))
     return path
 
+def zone_touching(pos, zone):
+    """The player's hull (32 wide, 72 tall) still overlaps the zone box."""
+    x0, y0, z0, x1, y1, z1 = zone
+    return (min(x0, x1) - 16 <= pos[0] <= max(x0, x1) + 16 and
+            min(y0, y1) - 16 <= pos[1] <= max(y0, y1) + 16 and
+            pos[2] < max(z0, z1) and pos[2] + 72 > min(z0, z1))
+
+def rezone_reference(map_name):
+    """Re-time the reference run from leaving the start zone instead of from the jump.
+
+    The timer used to start on the jump; it now starts on leaving the zone. The
+    original time is kept in the header as jump_clean_time=, so this can run again.
+    """
+    zpath = os.path.join(DATA, "%s_zone.txt" % map_name)
+    p = paths(map_name)
+    if not (os.path.isfile(zpath) and os.path.isfile(p["states"]) and os.path.isfile(p["demo"])):
+        return None
+    zone = None
+    with open(zpath, encoding="ascii") as fh:
+        for line in fh:
+            f = line.split()
+            if len(f) == 7 and f[0] == "start":
+                zone = [float(v) for v in f[1:]]
+    pre = header_value(p["demo"], "preframes=", int)
+    rate = header_value(p["demo"], "tickrate=")
+    if zone is None or pre is None or not rate:
+        return None
+    frames = []
+    with open(p["demo"], encoding="utf-8-sig") as fh:
+        for line in fh:
+            if line.startswith("#") or not line.strip():
+                continue
+            f = line.split()
+            frames.append((float(f[1]), float(f[2]), float(f[3])))
+    exit_tick = next((i for i in range(pre, len(frames)) if not zone_touching(frames[i], zone)), None)
+    if exit_tick is None:
+        return None
+
+    with open(p["states"], encoding="utf-8-sig") as fh:
+        lines = fh.read().split("\n")
+    head = lines[0]
+    base = header_value(p["states"], "jump_clean_time=") or header_value(p["states"], "clean_time=")
+    if not base:
+        return None
+    new = base - (exit_tick - pre) / rate
+    words = [w for w in head.split(" ") if not w.startswith(("clean_time=", "jump_clean_time="))]
+    lines[0] = " ".join(words) + " clean_time=%.3f jump_clean_time=%.3f" % (new, base)
+    with open(p["states"], "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines))
+    return base, new
+
+def retime(map_name):
+    t = rezone_reference(map_name)
+    if t:
+        print("  reference timed from leaving the start zone: %.3f s (%.3f s from the jump)" % (t[1], t[0]))
+
 def header_value(path, key, cast=float):
     try:
         with open(path, encoding="utf-8-sig") as fh:
@@ -201,12 +257,13 @@ def main():
                          "replay for this map")
     ap.add_argument("--spacing", type=float, default=64.0)
     ap.add_argument("--checkpoints", type=int, default=24)
-    ap.add_argument("--check", action="store_true", help="validate, change nothing")
+    ap.add_argument("--check", action="store_true", help="validate; only refreshes the start zone and the reference time")
     args = ap.parse_args()
 
     print("== %s ==" % args.map)
     if write_zone(args.map):
         print("  start zone copied from the timer's database")
+    retime(args.map)
     if args.check:
         ok = report(args.map)
         print()
@@ -236,6 +293,7 @@ def main():
     for line in res.stdout.splitlines():
         if line.startswith(("clean frames", "clean time", "segment", "  ")) or "dropped" in line:
             print("  %s" % line.strip())
+    retime(args.map)
 
     print()
     ok = report(args.map)

@@ -104,7 +104,10 @@ int   g_iWindupHeld    = 0;      // ticks the current side has been held
 int   g_iWindupSide    = 1;
 bool  g_bEpLearnedOpen = false;  // main slot: the learned wind-up is driving
 bool  g_bEpFollow      = false;  // wind-up slot: the main policy is flying the run
-int   g_iEpClockTick   = 0;      // tick the timer started on
+int   g_iEpClockTick   = 0;      // tick the timer started on: leaving the start zone
+int   g_iEpTakeoffTick = 0;      // tick the wind-up jumped
+bool  g_bEpClockOn     = false;
+float g_fStartSpeedCap = 475.0;  // combined speed kept on leaving the start zone, as on the server
 float g_fEpTakeoffSpeed = 0.0;
 
 // How a wind-up ended. Only a jump from well inside the start zone is the real
@@ -357,7 +360,7 @@ stock float Ep_WindupScore(int outcome)
 		return -30.0;                        // never took off
 
 	float secs = float(g_iEpTick - g_iEpClockTick) * GetTickInterval();
-	if (outcome == EP_FINISHED && g_fRefTime > 0.0)
+	if (outcome == EP_FINISHED && g_bEpClockOn && g_fRefTime > 0.0)
 	{
 		// 20 per second against the reference, so a tenth of a second is worth 2.
 		float score = 20.0 * (g_fRefTime - secs) + 10.0;
@@ -381,8 +384,8 @@ stock void Ep_Finish(int outcome)
 			static const char kWhy[][] = { "never took off", "", "walked to the zone edge",
 			                               "left the ground without jumping", "never jumped" };
 			if (g_bEpFollow)
-				PrintToServer("[CsAI]  wind-up: %d ground ticks, jumped at %.0f u/s, run %s in %.2fs, score %.1f",
-				              g_iEpClockTick, g_fEpTakeoffSpeed, kRun[outcome],
+				PrintToServer("[CsAI]  wind-up: %d ground ticks, jumped at %.0f u/s, left the zone %d ticks later, run %s in %.2fs, score %.1f",
+				              g_iEpTakeoffTick, g_fEpTakeoffSpeed, g_iEpClockTick - g_iEpTakeoffTick, kRun[outcome],
 				              float(g_iEpTick - g_iEpClockTick) * GetTickInterval(), terminal);
 			else
 				PrintToServer("[CsAI]  wind-up: %d ground ticks, %s, score %.1f",
@@ -540,6 +543,8 @@ stock void Ep_Reset()
 	g_iEpNoProgress = 0;
 	g_iEpPreTicks   = 0;
 	g_iEpClockTick  = 0;
+	g_iEpTakeoffTick = 0;
+	g_bEpClockOn    = !Zone_Touching(pos);    // mid-map starts are already on the clock
 	g_bEpGround     = false;
 	g_bEpFollow     = false;
 	g_iEpTakeoff    = TAKEOFF_NONE;
@@ -661,6 +666,21 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	GetClientAbsOrigin(client, pos);
 	GetEntPropVector(client, Prop_Data, "m_vecVelocity", vel);
 
+	// The timer starts on leaving the start zone, and the server caps the combined
+	// speed kept at that moment. shavit ignores bots, so both are applied here.
+	if (!g_bEpClockOn && !g_bEpGround && !Zone_Touching(pos))
+	{
+		g_bEpClockOn = true;
+		g_iEpClockTick = g_iEpTick;
+		g_iEpPreTicks = g_iEpTick;
+		float sp = GetVectorLength(vel);
+		if (g_fStartSpeedCap > 0.0 && sp > g_fStartSpeedCap)
+		{
+			ScaleVector(vel, g_fStartSpeedCap / sp);
+			TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, vel);
+		}
+	}
+
 	g_iTrackHint = Track_Nearest(pos, g_iTrackHint);
 
 	float closest[3], dist;
@@ -721,13 +741,12 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			Ep_PushStep();
 		g_bEpGround = false;
 		g_bEpFollow = true;
-		g_iEpClockTick = g_iEpTick;
-		g_iEpPreTicks = g_iEpTick;
+		g_iEpTakeoffTick = g_iEpTick;
 		g_iEpNoProgress = 0;
 		Ep_ResetControl();
 	}
 
-	if (((g_iEpTick - g_iEpClockTick) % g_iFrameSkip) == 0)
+	if (((g_iEpTick - g_iEpTakeoffTick) % g_iFrameSkip) == 0)
 	{
 		if (!g_bEpFollow)
 		{
@@ -807,7 +826,8 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			g_iEpAction = act;
 			g_fEpLogp = logp;
 			g_iEpSteps++;
-			g_fEpStepReward -= g_fTimeCost;
+			if (g_bEpClockOn)
+				g_fEpStepReward -= g_fTimeCost;
 
 			g_fEpPendPos[0] = pos[0];
 			g_fEpPendPos[1] = pos[1];
@@ -822,7 +842,11 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 
 	// Captured after the action is decoded, so the view angle is the one used.
 	if (g_bEval)
+	{
 		Rec_Tick(client, buttons);
+		if (!g_bEpClockOn)
+			g_iRecPreFrames++;
+	}
 
 	g_iEpTick++;
 	return true;
@@ -831,6 +855,11 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 /** Ends the episode if the current state is terminal. g_iEpTick ticks have run. */
 stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
 {
+	// Landing again inside the start zone is a bunnyhop there, which the timer blocks.
+	if (g_iWindupTicks > 0 && g_bEpFollow && !g_bEpClockOn && g_iEpTick > g_iEpTakeoffTick + 4
+	    && (GetEntityFlags(client) & FL_ONGROUND))
+		return Ep_End(EP_STUCK);
+
 	float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
 	if (speed < 40.0 && (GetEntityFlags(client) & FL_ONGROUND) && !g_bEpGround)
 		g_iEpStuckTicks++;

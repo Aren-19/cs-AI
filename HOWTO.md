@@ -101,10 +101,13 @@ Each episode is one continuous attempt at the whole map.
 2. **Takeoff** - the wind-up has to jump from inside the start zone, at least 24
    units in from its edge, the way the recorded runs do (28 to 75 units in, then
    about 53 ticks in the air before dropping off the ledge). The `main` policy
-   takes over on the jump tick and the clock starts. Walking to the edge, walking
-   off anything, or never jumping counts as a failed wind-up. The start zone
-   comes from the timer's database (`setup_map.py` copies it).
-3. **The run** - the bot surfs until it finishes, falls, or stops advancing.
+   takes over on the jump tick. Walking to the edge, walking off anything, never
+   jumping, or landing again inside the zone counts as a failed wind-up.
+3. **Leaving the zone** - the clock starts, and the combined speed is capped at
+   475 u/s, as the server does for players. The start zone comes from the
+   timer's database; `setup_map.py` copies it and re-times the reference run
+   from the moment it left the zone.
+4. **The run** - the bot surfs until it finishes, falls, or stops advancing.
 
 The `main` slot opens three runs in four with the learned wind-up and the rest
 with a recorded one (`-LearnedMix`). The `windup` slot trains the wind-up: each of

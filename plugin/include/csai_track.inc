@@ -65,6 +65,16 @@ stock void Zone_Load()
 		              g_fZoneMin[0], g_fZoneMin[1], g_fZoneMin[2], g_fZoneMax[0], g_fZoneMax[1], g_fZoneMax[2]);
 }
 
+/** The player's hull (32 wide, 72 tall) still overlaps the start zone. */
+stock bool Zone_Touching(const float pos[3])
+{
+	if (!g_bZoneLoaded)
+		return false;
+	return pos[0] >= g_fZoneMin[0] - 16.0 && pos[0] <= g_fZoneMax[0] + 16.0
+	    && pos[1] >= g_fZoneMin[1] - 16.0 && pos[1] <= g_fZoneMax[1] + 16.0
+	    && pos[2] < g_fZoneMax[2] && pos[2] + 72.0 > g_fZoneMin[2];
+}
+
 /** Horizontal distance from the player's hull to the nearest side of the start zone; negative outside it. */
 stock float Zone_EdgeDistance(const float pos[3])
 {

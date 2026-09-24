@@ -230,6 +230,7 @@ void ArmBenchmark()
     g_bEvalLearned    = (GetCommandLineParamInt("+csai_evallearned", 1) != 0);
     g_iWindupMax      = GetCommandLineParamInt("+csai_windupmax", g_iWindupMax);
     g_fJumpInset      = GetCommandLineParamFloat("+csai_jumpinset", g_fJumpInset);
+    g_fStartSpeedCap  = GetCommandLineParamFloat("+csai_startcap", g_fStartSpeedCap);
     g_iWindupTicks    = GetCommandLineParamInt("+csai_windup", g_iWindupTicks);
     g_fWindupYawCap   = GetCommandLineParamFloat("+csai_windupyaw", g_fWindupYawCap);
     g_iWindupHold     = GetCommandLineParamInt("+csai_winduphold", g_iWindupHold);

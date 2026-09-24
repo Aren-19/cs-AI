@@ -312,6 +312,18 @@ score. First evaluation under the rule: the wind-ups that jump finish in 39.46 t
 39.65 s, jumping 58 units in with 51 ticks in the air; the ones still walking to
 the edge fail, which is what training now removes.
 
+## Timer starts on leaving the zone
+
+The server now starts the timer when the start zone is left rather than on the
+jump, and caps the combined speed there at 475 u/s, the KSF rule. Time in the air
+inside the zone is free, which is the point of jumping well inside it and
+strafing before the drop. The reference run re-timed this way is 38.28 s (it
+spends 51 ticks in the air inside the zone); surf_dune's is 61.07 s.
+
+First evaluation under the new clock: best 38.93 s, median about 38.97 s, with
+the bot leaving the zone 25 to 30 ticks after its jump against the reference's
+51. That gap is where the next gains are.
+
 ## Where it stands
 
 | | bot | reference |
