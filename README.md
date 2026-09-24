@@ -76,8 +76,9 @@ rest. Measured on 12 logical cores:
 Each attempt is one run of the whole map.
 
 1. The bot winds up from standing. It holds forward and one strafe key at a time,
-   turns its view no faster than a person does, and jumps when it chooses. The
-   timer starts on that tick, the same way the timer plugin starts it.
+   turns its view no faster than a person does, and jumps from well inside the
+   start zone, then strafes in the air before dropping off the ledge. The timer
+   starts on the jump, the same way the timer plugin starts it.
 2. From the jump, the surfing policy takes over and flies the rest of the map,
    strafing down onto the first ramp and on to the end.
 3. It scores on distance along the route, and on time if it reaches the end. That

@@ -24,7 +24,6 @@ float g_fTrackLength = 0.0;
 int   g_iTrackHint   = -1;       // last nearest index, for incremental search
 
 // shavit's start zone, from data/csai/<map>_zone.txt: "start x0 y0 z0 x1 y1 z1".
-// Walking out of it starts the timer the same as jumping does.
 float g_fZoneMin[3];
 float g_fZoneMax[3];
 bool  g_bZoneLoaded = false;
@@ -66,14 +65,19 @@ stock void Zone_Load()
 		              g_fZoneMin[0], g_fZoneMin[1], g_fZoneMin[2], g_fZoneMax[0], g_fZoneMax[1], g_fZoneMax[2]);
 }
 
-/** True while the player's hull still touches the start zone. */
-stock bool Zone_Contains(const float pos[3])
+/** Horizontal distance from the player's hull to the nearest side of the start zone; negative outside it. */
+stock float Zone_EdgeDistance(const float pos[3])
 {
 	if (!g_bZoneLoaded)
-		return true;
-	return pos[0] >= g_fZoneMin[0] - 16.0 && pos[0] <= g_fZoneMax[0] + 16.0
-	    && pos[1] >= g_fZoneMin[1] - 16.0 && pos[1] <= g_fZoneMax[1] + 16.0
-	    && pos[2] < g_fZoneMax[2] && pos[2] + 62.0 > g_fZoneMin[2];
+		return 1.0e9;
+	float d = pos[0] - (g_fZoneMin[0] - 16.0);
+	float e = (g_fZoneMax[0] + 16.0) - pos[0];
+	if (e < d) d = e;
+	e = pos[1] - (g_fZoneMin[1] - 16.0);
+	if (e < d) d = e;
+	e = (g_fZoneMax[1] + 16.0) - pos[1];
+	if (e < d) d = e;
+	return d;
 }
 
 stock void Track_Load()

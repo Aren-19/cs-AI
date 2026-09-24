@@ -98,9 +98,12 @@ Each episode is one continuous attempt at the whole map.
    `windup` policy: forward held, one strafe key at a time held for at least 12
    ticks, view turning no faster than 3.5 degrees a tick. Ground time is free,
    as it is on the timer.
-2. **Takeoff** - when the wind-up chooses to jump, or leaves the ground or the
-   start zone, the `main` policy takes over on that tick and the clock starts.
-   The start zone comes from the timer's database (`setup_map.py` copies it).
+2. **Takeoff** - the wind-up has to jump from inside the start zone, at least 24
+   units in from its edge, the way the recorded runs do (28 to 75 units in, then
+   about 53 ticks in the air before dropping off the ledge). The `main` policy
+   takes over on the jump tick and the clock starts. Walking to the edge, walking
+   off anything, or never jumping counts as a failed wind-up. The start zone
+   comes from the timer's database (`setup_map.py` copies it).
 3. **The run** - the bot surfs until it finishes, falls, or stops advancing.
 
 The `main` slot opens three runs in four with the learned wind-up and the rest

@@ -297,6 +297,21 @@ recorded one. After 20 generations of co-training, 7 of 8 wind-up runs finish;
 the short 34 to 40 tick wind-ups are the slow and failing ones, which is what the
 score now teaches away from.
 
+## Jumping inside the zone
+
+Within a few hundred generations the wind-up found that walking out of the start
+zone also starts the timer, and ground time is free. It walked to the very edge
+(0 to 3 units from it) and dropped off 8 ticks later, which reads as faster
+because the clock starts later. That is not the technique: every recorded run
+jumps 28 to 75 units inside the edge and spends about 53 ticks in the air,
+strafing, before dropping off the ledge.
+
+The jump now has to come from at least 24 units inside the zone. Walking to that
+line, walking off anything, or never jumping ends the wind-up with the lowest
+score. First evaluation under the rule: the wind-ups that jump finish in 39.46 to
+39.65 s, jumping 58 units in with 51 ticks in the air; the ones still walking to
+the edge fail, which is what training now removes.
+
 ## Where it stands
 
 | | bot | reference |

@@ -106,6 +106,18 @@ bool  g_bEpLearnedOpen = false;  // main slot: the learned wind-up is driving
 bool  g_bEpFollow      = false;  // wind-up slot: the main policy is flying the run
 int   g_iEpClockTick   = 0;      // tick the timer started on
 float g_fEpTakeoffSpeed = 0.0;
+
+// How a wind-up ended. Only a jump from well inside the start zone is the real
+// technique: the recorded runs jump 28 to 75 units in from its edge and drop off
+// the ledge about 53 ticks later. Walking to the edge instead lets the timer
+// start late, which reads as faster and is not a prestrafe.
+#define TAKEOFF_NONE   0
+#define TAKEOFF_JUMP   1
+#define TAKEOFF_EDGE   2      // walked to the zone edge on the ground
+#define TAKEOFF_DROP   3      // left the ground without jumping
+#define TAKEOFF_LIMIT  4      // never jumped
+int   g_iEpTakeoff     = TAKEOFF_NONE;
+float g_fJumpInset     = 24.0;   // how far inside the zone edge the jump must be
 int   g_iEpOutcomeRun  = EP_RUNNING;   // how the run itself ended
 int   g_iEpSide = 1;           // strafe side of the decision in flight
 int   g_iEpTrim = 0;
@@ -366,9 +378,15 @@ stock void Ep_Finish(int outcome)
 		if (g_bEval)
 		{
 			static const char kRun[][] = { "running", "fell", "finished", "timed out", "stuck", "wind-up" };
-			PrintToServer("[CsAI]  wind-up: %d ground ticks, takeoff %.0f u/s, run %s in %.2fs, score %.1f",
-			              g_iEpClockTick, g_fEpTakeoffSpeed, g_bEpFollow ? kRun[outcome] : "never took off",
-			              float(g_iEpTick - g_iEpClockTick) * GetTickInterval(), terminal);
+			static const char kWhy[][] = { "never took off", "", "walked to the zone edge",
+			                               "left the ground without jumping", "never jumped" };
+			if (g_bEpFollow)
+				PrintToServer("[CsAI]  wind-up: %d ground ticks, jumped at %.0f u/s, run %s in %.2fs, score %.1f",
+				              g_iEpClockTick, g_fEpTakeoffSpeed, kRun[outcome],
+				              float(g_iEpTick - g_iEpClockTick) * GetTickInterval(), terminal);
+			else
+				PrintToServer("[CsAI]  wind-up: %d ground ticks, %s, score %.1f",
+				              g_iEpTick, kWhy[g_iEpTakeoff], terminal);
 		}
 		outcome = EP_WINDUP;
 	}
@@ -524,6 +542,7 @@ stock void Ep_Reset()
 	g_iEpClockTick  = 0;
 	g_bEpGround     = false;
 	g_bEpFollow     = false;
+	g_iEpTakeoff    = TAKEOFF_NONE;
 	g_fEpStepReward = 0.0;
 	Ep_ResetControl();
 }
@@ -580,13 +599,21 @@ stock bool Ep_WindupTick(int client, const float pos[3], const float vel[3], boo
 		}
 	}
 
-	bool grounded = (GetEntityFlags(client) & FL_ONGROUND) != 0;
-	if (jump || !grounded || !Zone_Contains(pos) || g_iEpTick >= g_iWindupMax)
-	{
-		g_fEpTakeoffSpeed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
-		return false;
-	}
-	return true;
+	int why = TAKEOFF_NONE;
+	if (jump)
+		why = TAKEOFF_JUMP;
+	else if (!(GetEntityFlags(client) & FL_ONGROUND))
+		why = TAKEOFF_DROP;
+	else if (Zone_EdgeDistance(pos) < g_fJumpInset)
+		why = TAKEOFF_EDGE;
+	else if (g_iEpTick >= g_iWindupMax)
+		why = TAKEOFF_LIMIT;
+	if (why == TAKEOFF_NONE)
+		return true;
+
+	g_iEpTakeoff = why;
+	g_fEpTakeoffSpeed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
+	return false;
 }
 
 stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
@@ -681,6 +708,13 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			g_iEpTick++;
 			return true;
 		}
+		// Anything but a jump from inside the zone is a failed wind-up.
+		if (g_iEpTakeoff != TAKEOFF_JUMP)
+		{
+			Ep_End(EP_STUCK);
+			return false;
+		}
+
 		// Takeoff: bank the last wind-up decision, then the main policy flies the
 		// rest frozen, so the wind-up is judged on the run it sets up.
 		if (g_iEpSteps > 0)
