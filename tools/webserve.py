@@ -89,7 +89,7 @@ def replay_header(path):
             p = e + 1
             style = blob[p]; p += 1
             track = blob[p]; p += 1
-            pre = struct.unpack_from("<i", blob, p)[0]; p += 4
+            p += 4                      # preframes
         frames = struct.unpack_from("<i", blob, p)[0]; p += 4
         seconds = struct.unpack_from("<f", blob, p)[0]; p += 4
         if version >= 4:
@@ -350,6 +350,11 @@ def main():
     print("[replay] %d file(s) visible:" % len(reps))
     for r in reps[:10]:
         print("   %-28s %6.0f KB" % (r["name"], r["size"] / 1024.0))
+
+    # Compressing a map takes minutes on a busy machine, longer than a browser
+    # waits, so every map with a replay is prepared in the background up front.
+    maps = sorted(set(r["map"] for r in reps if r.get("map")))
+    threading.Thread(target=lambda: [bsp_bz2(m) for m in maps], daemon=True).start()
 
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     print("\nlistening on http://%s:%d" % (args.host, args.port))

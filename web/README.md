@@ -31,10 +31,10 @@ against local files:
 
 | endpoint | serves |
 |---|---|
-| `POST /api/csspak/batch` | CS:S assets by Source path, read from the VPKs in the local install |
+| `POST /api/csspak/batch` | game assets by Source path, searched the way CS:S does: custom content, the CS:S and Half-Life 2 packs, loose files, then `cstrike/download` |
 | `GET /api/replay?id=` | a `.replay` from `data/csai/replays/` or shavit's replaybot dirs |
 | `GET /api/times` | record list built from those files (with real sync/strafes/jumps) |
-| `GET /maps/NAME.bsp.bz2` | the map from `cstrike/maps/`, bz2'd and cached |
+| `GET /maps/NAME.bsp.bz2` | the map from `cstrike/maps/` or `cstrike/download/maps/`, bz2'd and cached; every map with a replay is prepared in the background at startup, and `setup_map.py` prepares new maps |
 
 ## Where the replays come from
 

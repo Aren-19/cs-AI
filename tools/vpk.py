@@ -114,28 +114,55 @@ class VPK(object):
         self._archives.clear()
 
 class SourceFS(object):
-    """Resolves a Source path against loose files first, then every mounted VPK -"""
+    """Resolves a Source path the way CS:S does, in the order of its gameinfo.txt:
+    custom content, the CS:S packs, the Half-Life 2 packs, loose files, and last
+    the content downloaded from servers (where custom maps keep their materials)."""
+
+    HL2_PACKS = ("hl2_textures", "hl2_sound_vo_english", "hl2_sound_misc", "hl2_misc")
 
     def __init__(self, game_dir, extra_dirs=()):
-        self.roots = [game_dir]
-        for d in extra_dirs:
-            if os.path.isdir(d):
-                self.roots.append(d)
-        # custom/<addon>/ dirs mount like loose roots
+        install = os.path.dirname(os.path.abspath(game_dir))
+        self.sources = []       # ("dir", path) or ("vpk", VPK), searched in order
+
         custom = os.path.join(game_dir, "custom")
         if os.path.isdir(custom):
             for name in sorted(os.listdir(custom)):
                 sub = os.path.join(custom, name)
                 if os.path.isdir(sub):
-                    self.roots.append(sub)
-
-        self.vpks = []
+                    self._dir(sub)
+                elif name.lower().endswith("_dir.vpk"):
+                    self._vpk(sub)
         for name in sorted(os.listdir(game_dir)):
             if name.lower().endswith("_dir.vpk"):
-                try:
-                    self.vpks.append(VPK(os.path.join(game_dir, name)))
-                except (ValueError, OSError):
-                    pass
+                self._vpk(os.path.join(game_dir, name))
+        for name in self.HL2_PACKS:
+            self._vpk(os.path.join(install, "hl2", name + "_dir.vpk"))
+        self._vpk(os.path.join(install, "platform", "platform_misc_dir.vpk"))
+        self._dir(game_dir)
+        for d in extra_dirs:
+            self._dir(d)
+        self._dir(os.path.join(install, "hl2"))
+        self._dir(os.path.join(install, "platform"))
+        self._dir(os.path.join(game_dir, "download"))
+
+    def _dir(self, path):
+        if os.path.isdir(path):
+            self.sources.append(("dir", path))
+
+    def _vpk(self, path):
+        if os.path.isfile(path):
+            try:
+                self.sources.append(("vpk", VPK(path)))
+            except (ValueError, OSError):
+                pass
+
+    @property
+    def roots(self):
+        return [p for kind, p in self.sources if kind == "dir"]
+
+    @property
+    def vpks(self):
+        return [v for kind, v in self.sources if kind == "vpk"]
 
     def read(self, path):
         rel = path.replace("\\", "/").lstrip("/")
@@ -145,12 +172,17 @@ class SourceFS(object):
         # Windows "C:/anything" walks straight out of the game directory.
         if os.path.isabs(rel) or os.path.splitdrive(rel)[0]:
             return None
-        for root in self.roots:
-            full = os.path.join(root, rel.replace("/", os.sep))
-            # Belt and braces: the resolved path must still be under the root.
+        for kind, src in self.sources:
+            if kind == "vpk":
+                data = src.read(rel)
+                if data is not None:
+                    return data
+                continue
+            full = os.path.join(src, rel.replace("/", os.sep))
+            # The resolved path must still be under the root.
             try:
                 if os.path.commonpath([os.path.realpath(full),
-                                       os.path.realpath(root)]) != os.path.realpath(root):
+                                       os.path.realpath(src)]) != os.path.realpath(src):
                     continue
             except ValueError:
                 continue
@@ -160,10 +192,6 @@ class SourceFS(object):
                         return fh.read()
                 except OSError:
                     pass
-        for v in self.vpks:
-            data = v.read(rel)
-            if data is not None:
-                return data
         return None
 
     def stats(self):

@@ -107,6 +107,15 @@ def rezone_reference(map_name):
         fh.write("\n".join(lines))
     return base, new
 
+def precache_viewer(map_name):
+    """Prepare the map for the replay viewer now, so its first view does not wait."""
+    try:
+        from webserve import bsp_bz2
+        if bsp_bz2(map_name):
+            print("  map prepared for the replay viewer")
+    except Exception as e:
+        print("  could not prepare the map for the replay viewer (%s)" % e)
+
 def retime(map_name):
     t = rezone_reference(map_name)
     if t:
@@ -297,6 +306,7 @@ def main():
         if line.startswith(("clean frames", "clean time", "segment", "  ")) or "dropped" in line:
             print("  %s" % line.strip())
     retime(args.map)
+    precache_viewer(args.map)
 
     print()
     ok = report(args.map)
