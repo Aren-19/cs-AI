@@ -19,7 +19,8 @@ param(
     [double]$MouseAcc = 1.5,    # hands: must match training
     [double]$MouseMax = 7.0,
     [int]$MinPress   = 12,
-    [int]$MinCoast   = 6
+    [int]$MinCoast   = 6,
+    [int]$MaxCoast   = 16
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,7 +44,7 @@ $a = @(
     '+csai_devcost', $DevCost,
     '+csai_switchcost', $SwitchCost,
     '+csai_mouseacc', $MouseAcc, '+csai_mousemax', $MouseMax,
-    '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast,
+    '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast, '+csai_maxcoast', $MaxCoast,
     '+csai_bench_timescale', $Timescale,
     '+csai_bench_quit', '1',
     '+csai_bench_delay', '8'

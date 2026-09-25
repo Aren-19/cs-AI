@@ -28,6 +28,7 @@ param(
     [double]$MouseMax = 7.0,       # air mouse speed, deg/tick
     [int]$MinPress = 12,           # ticks a strafe key stays down
     [int]$MinCoast = 6,            # ticks with no key before the next press
+    [int]$MaxCoast = 16,           # ticks with no key before a press is required
     [int]$StallSeconds = 240,      # no new generation for this long counts as a stall
     [int]$SilentSeconds = 600,     # a server quiet this long while others work is restarted
     [int]$EvalEvery = 40,          # generations between evaluations
@@ -185,7 +186,7 @@ function Start-Actor([string]$level, [int]$id) {
         '+csai_finishbonus', $FinishBonus, '+csai_finishfloor', $FinishFloor,
         '+csai_windup', $Windup, '+csai_learnedmix', $LearnedMix, '+csai_linejitter', $LineJitter,
         '+csai_mouseacc', $MouseAcc, '+csai_mousemax', $MouseMax,
-        '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast,
+        '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast, '+csai_maxcoast', $MaxCoast,
         '+csai_bench_timescale', $cfg.Timescale,
         '+csai_bench_quit', '0', '+csai_bench_delay', '8'
     )
@@ -217,7 +218,7 @@ function Invoke-Eval {
     $ea = @('-Runs', '8', '-Map', $m, '-Greedy', '1', '-Port', $EvalPort,
             '-FrameSkip', $FrameSkip, '-DevCost', $DevCost, '-Windup', $Windup,
             '-Partner', $Partner, '-MouseAcc', $MouseAcc, '-MouseMax', $MouseMax,
-            '-MinPress', $MinPress, '-MinCoast', $MinCoast,
+            '-MinPress', $MinPress, '-MinCoast', $MinCoast, '-MaxCoast', $MaxCoast,
             '-Timescale', '80', '-TimeoutSec', '600')
     if ($Slot) { $ea += @('-Slot', $Slot) }
     return (Start-HiddenPowerShell (Join-Path $Root 'tools\eval.ps1') $ea $Root)
@@ -330,7 +331,9 @@ function Test-Humanlike([string]$m, [int]$gen) {
     if (-not (Test-Path $rep)) { return }
     $sum = Join-Path $LogDir "humanlike$Sfx.txt"
     Remove-Item $sum -ErrorAction SilentlyContinue
-    $hp = Start-Hidden 'python.exe' @((Join-Path $Root 'tools\humanlike.py'), $rep, '--map', $m, '--summary', $sum) (Join-Path $Root 'tools')
+    $ha = @((Join-Path $Root 'tools\humanlike.py'), $rep, '--map', $m, '--summary', $sum)
+    if ($Windup -le 0) { $ha += '--run-only' }
+    $hp = Start-Hidden 'python.exe' $ha (Join-Path $Root 'tools')
     if ($hp) { [void]$hp.WaitForExit(60000) }
     if (Test-Path $sum) { Write-Log "  looks: $((Get-Content $sum -Raw).Trim())" }
 }

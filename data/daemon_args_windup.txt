@@ -1,1 +1,1 @@
--Map surf_demise -Slot windup -Windup 400 -Partner main -FrameSkip 2 -StateMix 0 -Entropy 0.02 -SwitchCost 0.10 -TrimCost 0.02 -DevCost 0 -EvalEvery 20 -Guard 0
+-Map surf_demise -Slot windup -Windup 400 -Partner main -FrameSkip 2 -StateMix 0 -Entropy 0.02 -EntFinal 0.002 -EntAnneal 6000 -SwitchCost 0.10 -TrimCost 0.02 -DevCost 0 -EvalEvery 20 -Guard 0

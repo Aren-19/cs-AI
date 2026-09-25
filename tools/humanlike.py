@@ -31,6 +31,7 @@ LIMITS = {
     "air_accel_p99":  3.0,
     "ground_turn_max": 4.5,
     "short_holds":    0.05,    # share of key presses held 2 ticks or less
+    "no_key":         0.25,    # share of air ticks with no strafe key
 }
 
 def wrap(a):
@@ -151,6 +152,8 @@ def main():
     ap.add_argument("--human")
     ap.add_argument("--map")
     ap.add_argument("--summary", help="also write a one-line verdict to this file")
+    ap.add_argument("--run-only", dest="run_only", action="store_true",
+                    help="judge only the timed run, not the wind-up (it may be a recorded one)")
     args = ap.parse_args()
 
     mapname = args.map or parse_replay(args.replay).map or ""
@@ -160,6 +163,9 @@ def main():
     if bot is None:
         print("%s: too short to measure" % args.replay)
         return 1
+    if args.run_only:
+        for k in ("ground_turn_max", "jump_inside", "zone_air_ticks", "zone_turn", "zone_reversals"):
+            bot.pop(k, None)
 
     print("%-32s %16s %16s" % (mapname, "this run", "human" if ref else ""))
     for key, label, fmt in ROWS:

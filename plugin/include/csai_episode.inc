@@ -112,6 +112,7 @@ float g_fGroundAcc     = 1.0;
 float g_fGroundMax     = 3.5;
 int   g_iMinPress      = 12;     // ticks a strafe key stays down before it may change or lift
 int   g_iMinCoast      = 6;      // ticks with no key before one may be pressed again
+int   g_iMaxCoast      = 16;     // ticks with no key before one must be pressed; 0 = no limit
 
 // The mouse eases towards the speed it is asked for, a share of the gap each
 // tick, so a swipe speeds up and settles like a hand instead of snapping.
@@ -515,6 +516,9 @@ stock int Ep_WindupMask()
 			if (((a < POL_TRIMS) ? 1 : -1) != side)
 				mask &= ~(1 << a);
 	}
+	// In the air, hands stay off the keys only briefly.
+	if (g_bWindupJumped && g_iCmdSide == 0 && g_iMaxCoast > 0 && g_iCmdHeld >= g_iMaxCoast)
+		mask &= ~(1 << POL_COAST);
 	return mask;
 }
 
@@ -673,6 +677,8 @@ stock int Ep_RunMask()
 	}
 	else if (g_iCmdSide == 0 && g_iCmdHeld < g_iMinCoast)
 		mask = (1 << POL_COAST);
+	else if (g_iCmdSide == 0 && g_iMaxCoast > 0 && g_iCmdHeld >= g_iMaxCoast)
+		mask &= ~(1 << POL_COAST);          // a person does not surf hands-off for long
 	return mask;
 }
 

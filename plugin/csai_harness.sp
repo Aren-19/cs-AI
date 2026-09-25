@@ -243,6 +243,7 @@ void ArmBenchmark()
     g_fGroundMax      = GetCommandLineParamFloat("+csai_groundmax", g_fGroundMax);
     g_iMinPress       = GetCommandLineParamInt("+csai_minpress", g_iMinPress);
     g_iMinCoast       = GetCommandLineParamInt("+csai_mincoast", g_iMinCoast);
+    g_iMaxCoast       = GetCommandLineParamInt("+csai_maxcoast", g_iMaxCoast);
     g_iEpNoProgMax    = GetCommandLineParamInt("+csai_noprog", g_iEpNoProgMax);
     g_fTrimCost       = GetCommandLineParamFloat("+csai_trimcost", g_fTrimCost);
     g_fDeviationCost  = GetCommandLineParamFloat("+csai_devcost", g_fDeviationCost);
@@ -270,8 +271,8 @@ void ArmBenchmark()
         PrintToServer("[CsAI] opening: learned wind-up from '%s' on %.0f%% of runs, recorded on the rest",
                       g_sPartner, g_fLearnedMix * 100.0);
 
-    PrintToServer("[CsAI] hands: mouse %.1f deg/tick^2 in the run, %.1f in the zone air, %.1f on the ground, up to %.1f deg/tick, key down %d ticks, up %d",
-                  g_fMouseAcc, g_fWindupAcc, g_fGroundAcc, g_fMouseMax, g_iMinPress, g_iMinCoast);
+    PrintToServer("[CsAI] hands: mouse %.1f deg/tick^2 in the run, %.1f in the zone air, %.1f on the ground, up to %.1f deg/tick, key down %d ticks, up %d to %d",
+                  g_fMouseAcc, g_fWindupAcc, g_fGroundAcc, g_fMouseMax, g_iMinPress, g_iMinCoast, g_iMaxCoast);
 
     char cmdline[512];
     GetCommandLine(cmdline, sizeof(cmdline));
