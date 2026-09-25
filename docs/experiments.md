@@ -365,7 +365,98 @@ practice on surf_utopia_njv just as training runs began to finish there. The
 guard is off (`-Guard 0`) until the results settle; the best checkpoint per map
 is still kept.
 
+## The shifted line made it worse
+
+Measured on batches from gens 19637 to 19673: from the start of surf_demise, runs
+shown the real line finished 88% of the time (80 of 91) and runs shown a shifted
+line 0.5% (2 of 372). 400 generations earlier it was 0.6%, so it was not learning
+to cope. The policy steers almost entirely by the line points 368 to 1472 units
+ahead, and a 300-unit shift turns the nearest of those by 39 degrees, so the
+shift gave it wrong steering on four runs in five. The shift is off
+(`-LineJitter 0`). Not copying one line needs better inputs than the line, not
+a blurred line.
+
+## Human hands
+
+A look at the replays against the recorded runs:
+
+- The wind-up turned in fixed steps and snapped the view 44 to 66 degrees on the
+  jump tick, where people turn smoothly.
+- It jumped late, walking nearly to the zone edge, then handed over at once. The
+  recorded runs jump 37 to 53 units inside the zone and strafe in the air there
+  for 43 to 49 ticks, turning 170 to 230 degrees.
+- In the run, the view was locked to the direction of travel and keys were
+  tapped: many presses of one or two ticks, and long stretches with no key.
+
+The controls are now built like hands:
+
+- **Wind-up gestures.** Each wind-up decision is a key and a mouse speed. The
+  mouse eases towards that speed (at most 1.0 deg/tick^2 on the ground, 2.5 in
+  the air, 3.5 and 7 deg/tick top speed), a chosen side is kept 12 ticks, and the
+  wind-up keeps flying through the zone air until it leaves the zone. That is the
+  handover now, not the jump.
+- **Run mouse.** The run policy still picks a key and how far the view should
+  sit off the direction of travel, but the view gets there through a mouse that
+  eases in, capped at 1.5 deg/tick^2 and 7 deg/tick. A plain rate cap turned out
+  to be the problem: it hits the limit on every correction, which is exactly the
+  twitch. Easing towards the target keeps acceleration near zero most of the
+  time.
+- **Keys.** A key stays down 12 ticks, and after letting go the next press waits
+  6. The key comes up while the mouse still turns the other way, the gap a person
+  leaves on a direction change.
+- **Masks.** Actions the hands cannot do right now are removed from the choice,
+  both on the server and in the learner, so the policy never learns from actions
+  it could not take.
+- **Inputs.** The policy now also sees its own hands: mouse speed, view against
+  the direction of travel, which key and for how long, whether it is on the
+  ground, and in the wind-up, the distance to the zone edge and the time in the
+  air. 47 inputs instead of 39; the old policy was widened with zero weights on
+  the new inputs, so it starts out acting exactly as before.
+
+First numbers, the old run policy on surf_demise with the recorded wind-up:
+
+| hands | finished | mouse change, 99th pct | key held, median |
+|---|---|---|---|
+| old, instant view | 8 of 8 | - | - |
+| rate cap 2.5 | 1 of 4, 39.98 s | 2.50 | 22 ticks |
+| eased, 1.5 | 0 of 4, best 35% | 1.50 | 12 ticks |
+| the record | - | 0.59 | 33 ticks |
+
+So it has to relearn its timing with the new hands, and that is what training
+is doing. The wind-up policy starts from scratch, since its actions mean
+something else now. `tools/humanlike.py` measures every evaluation against the
+record.
+
+## Faster learner
+
+Three quarters of the learner's time went into rebuilding in Python the
+observations the server had already computed. Batches now carry the
+observation and the allowed actions for every step, so the learner reads them
+instead (format 2, with a header; old batches still read). The update itself
+runs in float32 on one thread, with one value pass per batch. A generation now
+takes 0.02 to 0.4 s of learner time instead of about 3.
+
+The entropy schedule also restarted on every resume; where it stands is now
+saved in the checkpoint. The pull towards the old surf_demise policy
+(`--kl-ref`) is off by default.
+
+## One line to teach a map
+
+`CsAI.bat teach <map>` takes a map from the timer's record to training: it builds
+the route, restart points, recorded wind-up and start zone, adds the map to the
+list and restarts training. Only Normal and Segmented records are used; a TAS or
+sideways record would teach the bot something no person does. `CsAI.bat status`
+shows each map's record next to the bot's best, and a beaten record is logged
+and kept in `data/records.txt`.
+
+Tried on surf_dune, which the policy had never seen: it trained at once, with
+runs from the start reaching 7.9% of the map on average and 17% at best in the
+first batch. surf_dune stays out of training as the test of how well it handles
+a new map.
+
 ## Where it stands
+
+Before the hands change, on the older surf_demise line:
 
 | | bot | reference |
 |---|---|---|

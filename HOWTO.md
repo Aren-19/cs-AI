@@ -94,26 +94,51 @@ evaluation, or the furthest run if none finished.
 
 Each episode is one continuous attempt at the whole map.
 
-1. **Wind-up** - the bot stands at the start and winds up on the ground with the
-   `windup` policy: forward held, one strafe key at a time held for at least 12
-   ticks, view turning no faster than 3.5 degrees a tick. Ground time is free,
-   as it is on the timer.
-2. **Takeoff** - the wind-up has to jump from inside the start zone, at least 24
-   units in from its edge, the way the recorded runs do (28 to 75 units in, then
-   about 53 ticks in the air before dropping off the ledge). The `main` policy
-   takes over on the jump tick. Walking to the edge, walking off anything, never
-   jumping, or landing again inside the zone counts as a failed wind-up.
-3. **Leaving the zone** - the clock starts, and the combined speed is capped at
-   475 u/s, as the server does for players. The start zone comes from the
-   timer's database; `setup_map.py` copies it and re-times the reference run
-   from the moment it left the zone.
-4. **The run** - the bot surfs until it finishes, falls, or stops advancing.
+1. **Wind-up** - the bot starts standing and the `windup` policy drives. Each
+   decision is a gesture: a strafe key and a mouse speed, turning towards that
+   key. On the ground it holds forward; the view turns at most 3.5 degrees a
+   tick and eases in. A chosen side is kept at least 12 ticks. Ground time is
+   free, as it is on the timer.
+2. **Takeoff** - the wind-up jumps from inside the start zone, at least 16 units
+   in from its edge. The recorded runs jump 37 to 53 units in.
+3. **Zone air** - it keeps strafing in the air, left and right, until it leaves
+   the zone. The recorded runs spend 43 to 49 ticks here and turn 170 to 230
+   degrees. Walking to the edge, walking off anything, never jumping, landing
+   again inside the zone, or staying in the air there too long all count as a
+   failed wind-up.
+4. **Leaving the zone** - the clock starts, the combined speed is capped at 475
+   u/s as the server does for players, and the `main` policy takes over with the
+   mouse and keys as they are. The start zone comes from the timer's database;
+   `setup_map.py` copies it and re-times the reference run from the moment it
+   left the zone.
+5. **The run** - the bot surfs until it finishes, falls, or stops advancing.
 
-The `main` slot opens three runs in four with the learned wind-up and the rest
+The `main` slot opens a share of its runs with the learned wind-up and the rest
 with a recorded one (`-LearnedMix`). The `windup` slot trains the wind-up: each of
-its episodes is a whole run, with `main` flying everything after the jump, and
-the only score is how that run ends, 20 points per second against the reference
-time. Evaluations and replays always use the learned wind-up.
+its episodes is a whole run, with `main` flying everything after the zone, and
+the score is how that run ends: +10 for finishing at the reference time, more
+when faster, and between -10 and -20 for not finishing, by how far it got. A
+failed wind-up scores below that. Evaluations and replays use the learned
+wind-up when there is one.
+
+### Hands
+
+Both policies act through the same limits, set per slot in the daemon
+arguments:
+
+| setting | default | what it limits |
+|---|---|---|
+| `-MouseAcc` | 1.5 | how fast the mouse speed may change in the run, degrees per tick per tick |
+| `-MouseMax` | 7 | mouse speed, degrees per tick |
+| `-MinPress` | 12 | ticks a strafe key stays down |
+| `-MinCoast` | 6 | ticks with no key before the next press |
+
+The start zone air allows a faster mouse change (2.5), as the recorded runs
+show. The policy only sees the actions these limits allow, and the learner
+knows which those were.
+
+`python tools/humanlike.py <replay>` puts a run next to the record on the same
+map. Every evaluation runs it and logs a `looks:` line.
 
 Jump is held throughout. With `sv_enablebunnyhopping 1` that means clipping a
 ramp auto-hops instead of sticking and dumping momentum.
@@ -134,26 +159,33 @@ comparable.
 
 ## Using a different map
 
-One command turns a recorded run into everything needed:
+Set a time on it with the timer, then:
 
 ```bash
-python tools/setup_map.py surf_dune
+CsAI.bat teach surf_dune
 ```
 
 It locates the timer's replay for that map, derives the reference line, the
-restart checkpoints, the prestrafe and the run to clone from, then validates the
-result. It also copies the start zone from the timer's database and times the
-reference run from leaving it. Maps found in `download/maps` count as installed.
+restart checkpoints and the recorded wind-up, validates the result, copies the
+start zone from the timer's database, times the reference run from leaving it,
+adds the map to `-Map` in `data/daemon_args.txt` and restarts training if it is
+running. Maps found in `download/maps` count as installed.
+`CsAI.bat forget surf_dune` takes it out again.
+
+The setup step on its own, without touching training:
 
 ```bash
 python tools/setup_map.py surf_dune --check
 ```
 
-Then add it to `-Map` in `data/daemon_args.txt` and `data/daemon_args_windup.txt`
-(`-Map surf_demise,surf_utopia_njv,surf_dune`) and press **start**. One policy
-learns all of them: each slot's servers are shared out between the maps, every
-batch says which map it came from, and evaluations take turns. The panel shows
-each map on its own line, and the best result is kept per map.
+One policy learns all the maps: each slot's servers are shared out between them,
+every batch says which map it came from, and evaluations take turns. The panel
+and `CsAI.bat status` show each map on its own line, and the best result is kept
+per map. When an evaluation beats the record, the supervisor log says
+`RECORD BEATEN` and the time goes into `data/records.txt`.
+
+The wind-up slot trains on surf_demise only for now, so on other maps the
+learned wind-up is one it has not practised there.
 
 Track points are 92 units apart on every map, because that is what the policy
 learned on. A track built at another spacing changes what it sees ahead.

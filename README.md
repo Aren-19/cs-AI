@@ -17,17 +17,18 @@ part of this should be pointed at a public server.
 
 | map | record to beat | bot, best so far | finishing |
 |---|---|---|---|
-| surf_demise | 38.27 s | 39.84 s | 7 of 8 runs |
-| surf_utopia_njv | 54.67 s | - | still learning the map |
+| surf_demise | 38.27 s | retraining | - |
+| surf_utopia_njv | 54.67 s | retraining | - |
 
 Times run from leaving the start zone. Both records were set by hand.
 
-On the previous surf_demise line the bot finished 8 of 8 runs with a best of 39.32
-s against a 39.04 s record, with the same strafing technique as the person who set
-it. Moving to a new line broke it completely, which showed it had learned the
-route as much as the skill. Training now runs on two maps at once with the line
-deliberately blurred (see below), so it has to learn surfing rather than one
-route.
+The bot now has to use its hands the way a person does (see below), so it is
+relearning both maps from where it was. With the old, instant view it finished
+all 8 runs of an evaluation on surf_demise (median 40.08 s, fastest 39.84 s), but
+it strafed like a script: short key taps and a view locked to its direction of
+travel.
+
+`CsAI.bat status` shows the current numbers.
 
 ## Running
 
@@ -46,20 +47,49 @@ Game servers, learners and supervisors run on a separate desktop that is never
 shown, so nothing else pops up. Closing the panel while training runs asks
 whether to stop it first.
 
+The same things work from a terminal:
+
+```bash
+CsAI.bat teach surf_utopia_njv
+```
+
+| command | does |
+|---|---|
+| `CsAI.bat teach <map>` | learns a map from its record run and adds it to training |
+| `CsAI.bat forget <map>` | takes a map out of training |
+| `CsAI.bat status` | each map's record, the bot's best, and how often it finishes |
+| `CsAI.bat start` / `stop` | starts or stops training |
+
 [HOWTO.md](HOWTO.md) covers day-to-day use in more detail.
+
+## Teaching a map
+
+1. Set a time on the map with the timer. Segmented runs work too: loading a
+   checkpoint leaves no trace in the replay, so the line is clean.
+2. Run `CsAI.bat teach <map>`.
+
+That builds the route and the restart points from the timer's replay, copies the
+start zone, times the record from leaving it, adds the map to training and
+restarts it. The game servers are shared out between the maps, and every map is
+scored in turn. When the bot beats a record, the supervisor log says so and
+`CsAI.bat status` lists it.
+
+More recorded runs of the same map help. They do not need to be fast: a run that
+wobbles and recovers teaches more than another clean one.
+`python tools/setup_map.py <map> --check` shows which recordings stay close
+enough to the route to be useful.
 
 ## How it works
 
 Each attempt is one whole run of a map.
 
-1. **Wind-up.** The bot stands at the start, holds forward and one strafe key at
-   a time, and turns its view no faster than a person can. It jumps from well
-   inside the start zone and strafes in the air before dropping off the ledge.
-   Walking to the edge of the zone and stepping off does not count.
-2. **The run.** From the jump, the surfing policy flies the rest of the map. In
-   surf the one thing that matters is the angle between the held key and the
-   direction of travel, so that angle is the decision it makes, 33 times a
-   second. The mouse and keys follow from it.
+1. **Wind-up.** The bot starts standing. It walks forward with one strafe key
+   down and turns towards that key, jumps well inside the start zone, and
+   strafes left and right in the air until it leaves the zone. Each decision is
+   a gesture: which key, and how fast to move the mouse.
+2. **The run.** From leaving the zone, the surfing policy flies the rest of the
+   map. It picks the strafe key and how far the view should sit off the
+   direction of travel, 33 times a second. The mouse eases towards that.
 3. **Scoring.** It is rewarded for distance along the route and for finishing,
    and a finish pays more the faster it is than the record. That is what pushes
    it past copying towards beating the time.
@@ -69,47 +99,42 @@ judged on the finish time of the whole run that follows it, so it learns the
 wind-up that sets up the fastest run, not the one that looks fastest at the
 jump.
 
+### Human hands
+
+Both policies work through limits measured on the recorded runs, so there are
+no tick-perfect strafes:
+
+- The mouse has momentum. It speeds up and settles over several ticks instead of
+  snapping, and never turns faster than a person does (7 degrees a tick).
+- A strafe key stays down at least 12 ticks, and after letting go the next press
+  waits 6.
+- On a direction change the key comes up while the mouse is still turning the
+  old way, as it does for a person, instead of flipping in one tick.
+- The jump has to be well inside the start zone; stepping off the edge does not
+  count.
+
+`tools/humanlike.py` compares a replay with the record on the same map: mouse
+speed and acceleration, how long keys are held, where the wind-up jumps and how
+long it stays in the air. Every evaluation runs it and writes the result to the
+supervisor log.
+
 ### Not copying
 
 The recorded route is only a rough guide:
 
-- In training, the line the bot is shown is shifted by a random slow wave every
-  run, up to 300 units sideways and 150 up or down. It cannot rely on the exact
-  line, so it has to read the ramps around it, which it measures with short
-  traces.
 - Leaving the line costs very little, so a faster line of its own is not
   punished.
-- It trains on several maps at once with one policy.
+- It trains on several maps at once with one policy, and measures the ramps
+  around it with short traces.
+- Scoring, evaluations and replays always use the real line.
 
-Scoring, evaluations and replays always use the real line.
+Shifting the line the bot is shown by a random amount each run was tried and made
+it much worse; `docs/experiments.md` has the numbers.
 
 ### Keeping the best
 
-Every few minutes each map is scored on eight runs. The best version so far is
-kept, and if training falls clearly behind it for several scorings in a row, it
-goes back to that version once.
-
-## Maps
-
-One policy trains on every map listed in `data/daemon_args.txt`. To add a map,
-set a record on it, then:
-
-```bash
-python tools/setup_map.py surf_utopia_njv
-```
-
-This builds the route and the restart points from the timer's replay, copies the
-start zone, and times the record from leaving it. Then add the map to `-Map` in
-`data/daemon_args.txt` and `data/daemon_args_windup.txt`, separated by commas,
-and press **start**. The game servers are shared out between the maps.
-
-Segmented runs work too: loading a checkpoint leaves no trace in the replay, so
-the line is clean.
-
-More recorded runs of the same map help as well. They do not need to be fast: a
-run that wobbles and recovers teaches more than another clean one.
-`python tools/setup_map.py <map> --check` shows which recordings stay close
-enough to the route to be useful.
+Every few minutes each map is scored on eight runs, and the best version so far
+on each map is kept.
 
 ## Timer rules
 
@@ -135,10 +160,10 @@ Changeable at any time, even while training runs. Nothing learned is lost.
 | high | 6 | default |
 | max | 11 | not recommended |
 
-Max is not faster. The learner, not the game servers, is the bottleneck: at 11
-servers most of the practice is thrown away unread, and the servers take the
-processor time the learner needs. Measured on 12 logical cores, 6 servers got
-through 44.3 million steps an hour and 11 got through 19.8 million.
+Max is not faster. At 11 servers most of the practice is thrown away unread, and
+the servers take the processor time the learner needs. Measured on 12 logical
+cores, 6 servers got through 44.3 million steps an hour and 11 got through 19.8
+million.
 
 ## Layout
 

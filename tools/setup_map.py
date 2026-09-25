@@ -20,13 +20,23 @@ ARTEFACTS = ("track", "states", "prestrafe", "demo")
 # csai_episode.inc: further than this from the centerline ends the episode.
 MAX_DEVIATION = 600.0
 
+# Timer styles a record may come from, best first: Normal, then Segmented. The
+# others change the physics or play the run by tool (TAS), so the bot would
+# learn from something no person does.
+RECORD_STYLES = ("0", "7")
+
 def find_replay(map_name, given):
     if given:
         return given if os.path.isfile(given) else None
-    for style in sorted(os.listdir(REPLAYBOT)) if os.path.isdir(REPLAYBOT) else []:
+    for style in RECORD_STYLES:
         p = os.path.join(REPLAYBOT, style, "%s.replay" % map_name)
         if os.path.isfile(p):
             return p
+    others = [s for s in (sorted(os.listdir(REPLAYBOT)) if os.path.isdir(REPLAYBOT) else [])
+              if s not in RECORD_STYLES and os.path.isfile(os.path.join(REPLAYBOT, s, "%s.replay" % map_name))]
+    if others:
+        print("  only records in other styles (%s); set one in Normal or Segmented"
+              % ", ".join(others))
     return None
 
 def paths(map_name):

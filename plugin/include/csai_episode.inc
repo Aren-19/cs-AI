@@ -78,7 +78,7 @@ float g_fFinishBonus   = 50.0;    // what finishing exactly on the reference pay
 float g_fFinishFloor   =  0.5;    // a finish never scores below this, however slow
 float g_fTimePower     =  8.0;    // how sharply the payout falls off with time
 float g_fTrimCost      = 0.05;    // per change of trim between decisions
-float g_fStartMaxFrac  = 0.90;     // never start so near the end that we finish instantly
+float g_fStartMaxFrac  = 0.90;     // never start so near the end that the run finishes at once
 
 ArrayList g_hEpBuf = null;
 
@@ -147,8 +147,8 @@ float g_fStartSpeedCap = 475.0;  // combined speed kept on leaving the start zon
 float g_fLineJitter    = 0.0;    // training: how far the line shown to the policy may be shifted sideways
 float g_fEpTakeoffSpeed = 0.0;
 float g_fEpJumpInset   = 0.0;    // for the eval printout: how far inside the zone the jump was
-float g_fEpFailSpeed   = 0.0;    // a failed wind-up: speed and distance to the zone edge when it failed
-float g_fEpFailEdge    = 256.0;
+float g_fEpFailSpeed   = 0.0;    // where a wind-up ended: its speed, and how far from the route
+float g_fEpEndDist     = 600.0;
 
 // How a wind-up ended. The recorded runs jump 37 to 53 units inside the start
 // zone, spend 43 to 49 ticks in the air there turning 170 to 230 degrees, and
@@ -683,18 +683,20 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 /** Terminal reward for a wind-up: how the whole run it led into went. */
 stock float Ep_WindupScore(int outcome)
 {
+	// How close to the route the wind-up ended, so that even a failure, or a
+	// run that ends at once, points towards the side of the zone the route
+	// leaves from.
+	float near = 1.0 - g_fEpEndDist / 600.0;
+	if (near < 0.0) near = 0.0;
+	if (near > 1.0) near = 1.0;
 	if (!g_bEpFollow)
 	{
-		// A little for speed built and for getting near the zone edge, so a
-		// failure still points somewhere. Always below leaving the zone (-20).
+		// A little for speed built too. Always below leaving the zone (-20).
 		float fast = g_fEpFailSpeed / 475.0;
 		if (fast > 1.0) fast = 1.0;
-		float near = 1.0 - g_fEpFailEdge / 256.0;
-		if (near < 0.0) near = 0.0;
-		if (near > 1.0) near = 1.0;
 		if (g_iEpTakeoff == TAKEOFF_LANDED || g_iEpTakeoff == TAKEOFF_AIRLONG)
 			return -25.0 + 2.0 * fast + 2.0 * near;
-		return -30.0 + 2.0 * fast;            // never took off properly
+		return -30.0 + 2.0 * fast + 2.0 * near;   // never took off properly
 	}
 
 	float secs = float(g_iEpTick - g_iEpClockTick) * GetTickInterval();
@@ -705,7 +707,7 @@ stock float Ep_WindupScore(int outcome)
 		return -10.0 + 20.0 * Exponential(-(secs - g_fRefTime) / 2.0);
 	}
 	float frac = (g_fTrackLength > 0.0) ? (g_fEpBestS - g_fEpStartS) / g_fTrackLength : 0.0;
-	return -20.0 + 10.0 * frac;
+	return -20.0 + 9.0 * frac + 1.0 * near;
 }
 
 stock void Ep_Finish(int outcome)
@@ -857,7 +859,6 @@ stock void Ep_Begin()
 /** Controller state the run policy starts from: it takes over the hands as they are. */
 stock void Ep_ResetControl()
 {
-	g_fEpPitch = PITCH_BIAS;
 	g_iEpTrim = 0;
 	if (g_iCmdSide != 0)
 		g_iEpSide = g_iCmdSide;
@@ -909,6 +910,7 @@ stock void Ep_Reset()
 	// A fresh start takes the view it was placed with and no key held.
 	float ang[3];
 	GetClientEyeAngles(g_iBot, ang);
+	g_fEpPitch = ang[0];
 	g_fMouseYaw = ang[1];
 	g_fMouseW = 0.0;
 	g_iKeySide = 0;
@@ -1040,7 +1042,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		}
 		g_iEpTakeoff = why;
 		g_fEpFailSpeed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
-		g_fEpFailEdge = Zone_EdgeDistance(pos);
+		g_fEpEndDist = dist;
 		if (why != TAKEOFF_EXIT)
 		{
 			Ep_End(EP_STUCK);
