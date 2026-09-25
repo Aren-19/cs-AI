@@ -47,6 +47,14 @@ int   g_iEpTickBudget  = 4000;
 int   g_iTrainStates   = 0;        // 0 = sample from all loaded states
 
 float g_fStateMix      = 0.0;      // share of episodes starting mid-map
+float g_fFocusMix      = 0.0;      // share starting just before where recent runs failed
+
+// Where this server's recent runs failed, as arc length. Starts are picked a
+// little before these, so the hard parts of a map get the practice.
+#define FOCUS_KEEP     32
+#define FOCUS_BEFORE   800.0       // units before the failure to start from
+float g_fFocusS[FOCUS_KEEP];
+int   g_iFocusN        = 0;
 float g_fStateLo       = 0.61;     // window to sample those from, as track fraction
 float g_fStateHi       = 0.72;
 
@@ -228,8 +236,36 @@ stock void Ep_OpenBatch()
 	g_hBatchFile.Write(head, 4, 4);
 }
 
+/** The last start state at least FOCUS_BEFORE units before a recent failure, or -1. */
+stock int Ep_PickFocusState()
+{
+	int have = (g_iFocusN < FOCUS_KEEP) ? g_iFocusN : FOCUS_KEEP;
+	if (have == 0 || g_iStateCount < 2 || g_fTrackLength <= 0.0)
+		return -1;
+	int k = RoundToFloor(Pol_Rand() * float(have));
+	if (k >= have)
+		k = have - 1;
+	float target = g_fFocusS[k] - FOCUS_BEFORE;
+	int pick = -1;
+	for (int i = 1; i < g_iStateCount; i++)
+	{
+		if (g_fStateFrac[i] > g_fStartMaxFrac)
+			break;
+		if (g_fStateFrac[i] * g_fTrackLength <= target)
+			pick = i;
+	}
+	return pick;
+}
+
 stock int Ep_PickStartState()
 {
+	if (g_fFocusMix > 0.0 && !g_bEval && Pol_Rand() < g_fFocusMix)
+	{
+		int f = Ep_PickFocusState();
+		if (f > 0)
+			return f;
+	}
+
 	if (g_fStateMix > 0.0 && g_iStateCount > 1 && Pol_Rand() < g_fStateMix)
 	{
 		int lo = -1, hi = -1;
@@ -686,7 +722,7 @@ stock float Ep_WindupScore(int outcome)
 	// How close to the route the wind-up ended, so that even a failure, or a
 	// run that ends at once, points towards the side of the zone the route
 	// leaves from.
-	float near = 1.0 - g_fEpEndDist / 600.0;
+	float near = 1.0 - g_fEpEndDist / 1500.0;
 	if (near < 0.0) near = 0.0;
 	if (near > 1.0) near = 1.0;
 	if (!g_bEpFollow)
@@ -707,7 +743,7 @@ stock float Ep_WindupScore(int outcome)
 		return -10.0 + 20.0 * Exponential(-(secs - g_fRefTime) / 2.0);
 	}
 	float frac = (g_fTrackLength > 0.0) ? (g_fEpBestS - g_fEpStartS) / g_fTrackLength : 0.0;
-	return -20.0 + 9.0 * frac + 1.0 * near;
+	return -20.0 + 8.0 * frac + 2.0 * near;
 }
 
 stock void Ep_Finish(int outcome)
@@ -725,8 +761,8 @@ stock void Ep_Finish(int outcome)
 			                               "left the ground without jumping", "never jumped",
 			                               "came down inside the zone", "stayed in the air too long", "" };
 			if (g_bEpFollow)
-				PrintToServer("[CsAI]  wind-up: %d ground ticks, jumped at %.0f u/s %.0f units inside, %d ticks in the air in the zone, run %s in %.2fs, score %.1f",
-				              g_iEpTakeoffTick, g_fEpTakeoffSpeed, g_fEpJumpInset, g_iWindupAirTicks, kRun[outcome],
+				PrintToServer("[CsAI]  wind-up: %d ground ticks, jumped at %.0f u/s %.0f units inside, %d ticks in the air in the zone, left it %.0f units from the route, run %s in %.2fs, score %.1f",
+				              g_iEpTakeoffTick, g_fEpTakeoffSpeed, g_fEpJumpInset, g_iWindupAirTicks, g_fEpEndDist, kRun[outcome],
 				              float(g_iEpTick - g_iEpClockTick) * GetTickInterval(), terminal);
 			else
 				PrintToServer("[CsAI]  wind-up: %d ticks, %s, score %.1f",
@@ -749,6 +785,13 @@ stock void Ep_Finish(int outcome)
 	}
 	else if (outcome == EP_FELL || outcome == EP_STUCK)
 		terminal = -1.0;
+
+	// Remember where the run failed, for focused starts.
+	if (g_iWindupTicks == 0 && !g_bEval && outcome != EP_FINISHED)
+	{
+		g_fFocusS[g_iFocusN % FOCUS_KEEP] = g_fEpBestS;
+		g_iFocusN++;
+	}
 
 	int n = g_hEpBuf.Length;
 	if (n > 0 && terminal != 0.0)

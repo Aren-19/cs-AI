@@ -15,6 +15,7 @@ param(
     [double]$EntFinal = 0.0,       # anneal the bonus to this (0 = no anneal)
     [int]$EntAnneal = 2000,        # generations to reach EntFinal
     [double]$StateMix = 0.3,       # share of episodes starting mid-map
+    [double]$FocusMix = 0.0,       # share starting just before where recent runs failed
     [double]$StateLo = 0.61,
     [double]$StateHi = 0.72,
     [double]$Gamma  = 0.997,
@@ -178,6 +179,7 @@ function Start-Actor([string]$level, [int]$id) {
         '+csai_batch', $cfg.Batch, '+csai_frameskip', $FrameSkip,
         '+csai_states', '1', '+csai_budget', '6000', '+csai_deviation', '600',
         '+csai_statemix', $StateMix, '+csai_statelo', $StateLo, '+csai_statehi', $StateHi,
+        '+csai_focusmix', $FocusMix,
         '+csai_prestrafe', '1', '+csai_switchcost', $SwitchCost, '+csai_devcost', $DevCost,
         '+csai_timecost', $TimeCost, '+csai_trimcost', $TrimCost,
         '+csai_finishbonus', $FinishBonus, '+csai_finishfloor', $FinishFloor,

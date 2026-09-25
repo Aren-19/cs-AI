@@ -209,6 +209,7 @@ void ArmBenchmark()
     g_iFrameSkip      = GetCommandLineParamInt("+csai_frameskip", g_iFrameSkip);
     g_iTrainStates    = GetCommandLineParamInt("+csai_states", g_iTrainStates);
     g_fStateMix       = GetCommandLineParamFloat("+csai_statemix", g_fStateMix);
+    g_fFocusMix       = GetCommandLineParamFloat("+csai_focusmix", g_fFocusMix);
     g_iForceSide      = GetCommandLineParamInt("+csai_forceside", g_iForceSide);
     g_iForceTrim      = GetCommandLineParamInt("+csai_forcetrim", g_iForceTrim);
     if (g_iForceSide != 0 || g_iForceTrim >= 0)
