@@ -953,6 +953,18 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		}
 		g_bEpLearnedOpen = false;
 
+		// A failed learned wind-up would leave the run standing in the zone,
+		// which says nothing about the run. Open with a recorded one instead.
+		if (why != TAKEOFF_EXIT && Pre_Begin(g_iBot))
+		{
+			if (g_bEval)
+				PrintToServer("[CsAI]  learned wind-up failed (%d), opening with a recorded one", why);
+			if (g_bRecording)
+				Rec_Start();
+			Ep_Reset();
+			return true;
+		}
+
 		// Keep the hands and the view as they are across the reset.
 		float yaw = g_fMouseYaw, w = g_fMouseW, pitch = g_fEpPitch;
 		int key = g_iKeySide, held = g_iKeyHeld, cmd = g_iCmdSide, cmdHeld = g_iCmdHeld;
