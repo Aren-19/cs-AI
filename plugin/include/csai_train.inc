@@ -60,6 +60,9 @@ stock void Train_WriteDoneMarker()
 	char map[PLATFORM_MAX_PATH];
 	GetCurrentMap(map, sizeof(map));
 	f.WriteLine("map %s", map);
+	f.WriteLine("format %d", BATCH_VERSION);
+	f.WriteLine("rec %d", EP_REC_FLOATS);
+	f.WriteLine("obs %d", OBS_DIM);
 	f.WriteLine("track_length %.1f", g_fTrackLength);
 	f.WriteLine("episodes %d", g_iBatchEpisodes);
 	f.WriteLine("gen %d", g_iPolicyGen);
@@ -346,8 +349,11 @@ stock void Eval_EpisodeDone()
 		g_fEvalBestFrac = frac;
 	if (keep)
 	{
-		char tag[64];
-		Format(tag, sizeof(tag), "gen%d", g_iPolicyGen);
+		char tag[96];
+		if (g_sSlot[0] == '\0')
+			Format(tag, sizeof(tag), "gen%d", g_iPolicyGen);
+		else
+			Format(tag, sizeof(tag), "%s_gen%d", g_sSlot, g_iPolicyGen);
 		Rec_Stop();
 		Rec_Save(tag, secs);
 	}

@@ -233,8 +233,16 @@ void ArmBenchmark()
     g_fStartSpeedCap  = GetCommandLineParamFloat("+csai_startcap", g_fStartSpeedCap);
     g_fLineJitter     = GetCommandLineParamFloat("+csai_linejitter", g_fLineJitter);
     g_iWindupTicks    = GetCommandLineParamInt("+csai_windup", g_iWindupTicks);
-    g_fWindupYawCap   = GetCommandLineParamFloat("+csai_windupyaw", g_fWindupYawCap);
     g_iWindupHold     = GetCommandLineParamInt("+csai_winduphold", g_iWindupHold);
+    g_iWindupAirMax   = GetCommandLineParamInt("+csai_windupair", g_iWindupAirMax);
+    g_fMouseAcc       = GetCommandLineParamFloat("+csai_mouseacc", g_fMouseAcc);
+    g_fMouseMax       = GetCommandLineParamFloat("+csai_mousemax", g_fMouseMax);
+    g_fWindupAcc      = GetCommandLineParamFloat("+csai_windupacc", g_fWindupAcc);
+    g_fGroundAcc      = GetCommandLineParamFloat("+csai_groundacc", g_fGroundAcc);
+    g_fGroundMax      = GetCommandLineParamFloat("+csai_groundmax", g_fGroundMax);
+    g_iMinPress       = GetCommandLineParamInt("+csai_minpress", g_iMinPress);
+    g_iMinCoast       = GetCommandLineParamInt("+csai_mincoast", g_iMinCoast);
+    g_iEpNoProgMax    = GetCommandLineParamInt("+csai_noprog", g_iEpNoProgMax);
     g_fTrimCost       = GetCommandLineParamFloat("+csai_trimcost", g_fTrimCost);
     g_fDeviationCost  = GetCommandLineParamFloat("+csai_devcost", g_fDeviationCost);
     g_iPitchMode      = GetCommandLineParamInt("+csai_pitch", g_iPitchMode);
@@ -255,11 +263,14 @@ void ArmBenchmark()
     PrintToServer("[CsAI] reward: timecost %.3f per decision, devcost %.2f, switchcost %.2f, trimcost %.2f",
                   g_fTimeCost, g_fDeviationCost, g_fSwitchCost, g_fTrimCost);
     if (g_iWindupTicks > 0)
-        PrintToServer("[CsAI] wind-up training: up to %d ground ticks, view capped at %.1f deg/tick, key held %d ticks, run flown by '%s'",
-                      g_iWindupMax, g_fWindupYawCap, g_iWindupHold, g_sPartner);
+        PrintToServer("[CsAI] wind-up training: up to %d ground and %d air ticks, side kept %d ticks, run flown by '%s'",
+                      g_iWindupMax, g_iWindupAirMax, g_iWindupHold, g_sPartner);
     else
         PrintToServer("[CsAI] opening: learned wind-up from '%s' on %.0f%% of runs, recorded on the rest",
                       g_sPartner, g_fLearnedMix * 100.0);
+
+    PrintToServer("[CsAI] hands: mouse %.1f deg/tick^2 in the run, %.1f in the zone air, %.1f on the ground, up to %.1f deg/tick, key down %d ticks, up %d",
+                  g_fMouseAcc, g_fWindupAcc, g_fGroundAcc, g_fMouseMax, g_iMinPress, g_iMinCoast);
 
     char cmdline[512];
     GetCommandLine(cmdline, sizeof(cmdline));
@@ -973,7 +984,10 @@ public Action Cmd_Cfg(int args)
     else if (StrEqual(key, "timepower"))  g_fTimePower   = StringToFloat(val);
     else if (StrEqual(key, "learnedmix")) g_fLearnedMix  = StringToFloat(val);
     else if (StrEqual(key, "windup"))     g_iWindupTicks = StringToInt(val);
-    else if (StrEqual(key, "windupyaw"))  g_fWindupYawCap = StringToFloat(val);
+    else if (StrEqual(key, "mouseacc"))   g_fMouseAcc    = StringToFloat(val);
+    else if (StrEqual(key, "mousemax"))   g_fMouseMax    = StringToFloat(val);
+    else if (StrEqual(key, "minpress"))   g_iMinPress    = StringToInt(val);
+    else if (StrEqual(key, "mincoast"))   g_iMinCoast    = StringToInt(val);
     else if (StrEqual(key, "winduphold")) g_iWindupHold  = StringToInt(val);
     else if (StrEqual(key, "trimcost"))   g_fTrimCost   = StringToFloat(val);
     else if (StrEqual(key, "states"))     g_iTrainStates  = StringToInt(val);

@@ -10,6 +10,7 @@
 #define POL_TRIMS  8
 #define POL_COAST    (2 * POL_TRIMS)       // press nothing this decision
 #define POL_ACTIONS  (2 * POL_TRIMS + 1)   // 2 sides x trims, then coast
+#define POL_MASK_ALL ((1 << POL_ACTIONS) - 1)
 
 #define POL_W1_N  (OBS_DIM * POL_H1)
 #define POL_W2_N  (POL_H1 * POL_H2)
@@ -152,8 +153,11 @@ stock bool Pol_Load(const char[] path, int net = NET_SELF)
 	return true;
 }
 
-stock int Pol_Act(const float obs[OBS_DIM], float &outLogp, bool greedy, int net = NET_SELF)
+/** Picks an action among those allowed by mask (bit i = action i); logp is over the allowed ones. */
+stock int Pol_Act(const float obs[OBS_DIM], float &outLogp, bool greedy, int net = NET_SELF, int mask = POL_MASK_ALL)
 {
+	if ((mask & POL_MASK_ALL) == 0)
+		mask = POL_MASK_ALL;
 	float h1[POL_H1];
 	for (int j = 0; j < POL_H1; j++)
 	{
@@ -183,7 +187,7 @@ stock int Pol_Act(const float obs[OBS_DIM], float &outLogp, bool greedy, int net
 		for (int i = 0; i < POL_H2; i++)
 			a += g_fW3[net][base + i] * h2[i];
 		logits[j] = a;
-		if (a > maxl)
+		if ((mask & (1 << j)) && a > maxl)
 			maxl = a;
 	}
 
@@ -191,28 +195,33 @@ stock int Pol_Act(const float obs[OBS_DIM], float &outLogp, bool greedy, int net
 	float sum = 0.0;
 	for (int j = 0; j < POL_ACTIONS; j++)
 	{
-		expv[j] = Exponential(logits[j] - maxl);
+		expv[j] = (mask & (1 << j)) ? Exponential(logits[j] - maxl) : 0.0;
 		sum += expv[j];
 	}
 
-	int pick = 0;
+	int pick = -1;
 	if (greedy)
 	{
-		float best = logits[0];
-		for (int j = 1; j < POL_ACTIONS; j++)
-			if (logits[j] > best) { best = logits[j]; pick = j; }
+		float best = -1.0e30;
+		for (int j = 0; j < POL_ACTIONS; j++)
+			if ((mask & (1 << j)) && logits[j] > best) { best = logits[j]; pick = j; }
 	}
 	else
 	{
 		float r = Pol_Rand() * sum;
 		float acc = 0.0;
-		pick = POL_ACTIONS - 1;
 		for (int j = 0; j < POL_ACTIONS; j++)
 		{
+			if (!(mask & (1 << j)))
+				continue;
+			pick = j;
 			acc += expv[j];
-			if (r <= acc) { pick = j; break; }
+			if (r <= acc)
+				break;
 		}
 	}
+	if (pick < 0)
+		pick = POL_COAST;
 
 	float p = expv[pick] / sum;
 	if (p < 1.0e-9)

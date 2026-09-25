@@ -30,15 +30,14 @@ stock void Rec_Stop()
 	g_bRecording = false;
 }
 
-/** Called every physics tick while recording. */
-stock void Rec_Tick(int client, int buttons)
+/** Called every physics tick while recording, with the view the bot commands this tick. */
+stock void Rec_Tick(int client, int buttons, const float ang[3])
 {
 	if (!g_bRecording || g_hRecFrames == null || g_hRecFrames.Length >= REC_MAX_FRAMES)
 		return;
 
-	float pos[3], ang[3];
+	float pos[3];
 	GetClientAbsOrigin(client, pos);
-	GetClientEyeAngles(client, ang);
 
 	any row[REC_CELLS];
 	row[0] = view_as<any>(pos[0]);

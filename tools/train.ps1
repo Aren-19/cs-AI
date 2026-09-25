@@ -13,6 +13,10 @@ param(
     [int]$ObsDump    = 0,
     [double]$LineJitter = 0,    # training: shift the line the policy sees by up to this many units
     [string]$Map     = 'surf_demise',
+    [string]$Slot    = '',      # blank = main
+    [int]$Windup     = 0,       # >0 = train the wind-up, up to this many ground ticks
+    [string]$Partner = '',      # slot whose policy runs alongside
+    [double]$LearnedMix = 0,    # main: share of runs opened by the learned wind-up
     [int]$Port       = 26900,
     [int]$TimeoutSec = 900,
     [switch]$Wait               # block until the server exits
@@ -37,8 +41,12 @@ $a = @(
     '+csai_linejitter', $LineJitter,
     '+csai_bench_timescale', $Timescale,
     '+csai_bench_quit', '1',
-    '+csai_bench_delay', '8'
+    '+csai_bench_delay', '8',
+    '+csai_windup', $Windup,
+    '+csai_learnedmix', $LearnedMix
 )
+if ($Slot) { $a += @('+csai_slot', $Slot) }
+if ($Partner) { $a += @('+csai_partner', $Partner) }
 
 Write-Host "==> $Map  batches=$Batches sync=$Sync timescale=$Timescale batch=$BatchSize" -ForegroundColor Cyan
 if ($Wait) {

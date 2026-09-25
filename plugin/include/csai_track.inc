@@ -10,7 +10,11 @@
 #define PROBE_DOWN_RAYS 5
 #define PROBE_DIM       (PROBE_RAYS + 3)
 #define WISH_DIM        0
-#define OBS_DIM         (7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM)
+// The policy's own state: mouse speed, view against motion, held key and how
+// long, on the ground, distance to the start zone edge, air time in the zone.
+#define EXTRA_DIM       8
+#define OBS_EXTRA       (7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM)
+#define OBS_DIM         (OBS_EXTRA + EXTRA_DIM)
 
 int g_iLookOffsets[LOOKAHEAD] = {4, 8, 16, 32, 64, 128, 256};
 bool g_bTrackTruncated = false;   // the file had more points than MAX_TRACK
@@ -75,17 +79,17 @@ stock bool Zone_Touching(const float pos[3])
 	    && pos[2] < g_fZoneMax[2] - 31.0 && pos[2] + 72.0 > g_fZoneMin[2] + 31.0;
 }
 
-/** Horizontal distance from the player's hull to the nearest side of the start zone; negative outside it. */
+/** Horizontal distance from the player to the nearest side of the start zone, as the timer measures it; negative outside. */
 stock float Zone_EdgeDistance(const float pos[3])
 {
 	if (!g_bZoneLoaded)
 		return 1.0e9;
-	float d = pos[0] - (g_fZoneMin[0] - 16.0);
-	float e = (g_fZoneMax[0] + 16.0) - pos[0];
+	float d = pos[0] - g_fZoneMin[0];
+	float e = g_fZoneMax[0] - pos[0];
 	if (e < d) d = e;
-	e = pos[1] - (g_fZoneMin[1] - 16.0);
+	e = pos[1] - g_fZoneMin[1];
 	if (e < d) d = e;
-	e = (g_fZoneMax[1] + 16.0) - pos[1];
+	e = g_fZoneMax[1] - pos[1];
 	if (e < d) d = e;
 	return d;
 }

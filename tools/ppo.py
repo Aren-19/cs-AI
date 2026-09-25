@@ -166,45 +166,141 @@ class Value(object):
 
 def compute_gae(rewards, values, dones, last_value=0.0, gamma=0.99, lam=0.95):
     """Generalised advantage estimation over a concatenation of episodes."""
-    n = len(rewards)
-    adv = np.zeros(n)
+    r = np.asarray(rewards, dtype=np.float64).tolist()
+    v = np.asarray(values, dtype=np.float64).tolist()
+    d = np.asarray(dones, dtype=np.float64).tolist()
+    n = len(r)
+    adv = [0.0] * n
     last_gae = 0.0
+    next_v = float(last_value)
     for t in range(n - 1, -1, -1):
-        if t == n - 1:
-            next_v = last_value
-        else:
-            next_v = values[t + 1]
-        nonterm = 1.0 - dones[t]
-        delta = rewards[t] + gamma * next_v * nonterm - values[t]
+        nonterm = 1.0 - d[t]
+        delta = r[t] + gamma * next_v * nonterm - v[t]
         last_gae = delta + gamma * lam * nonterm * last_gae
         adv[t] = last_gae
-    return adv, adv + values
+        next_v = v[t]
+    adv = np.array(adv)
+    return adv, adv + np.asarray(values, dtype=np.float64)
+
+# A masked-out action gets this logit: zero probability, and still finite so
+# entropy and gradients stay clean.
+MASKED = -1.0e9
+
+def _fwd_pol(Ws, o):
+    W1, b1, W2, b2, W3, b3 = Ws
+    z1 = o @ W1.T
+    z1 += b1
+    h1 = np.maximum(z1, 0.0)
+    z2 = h1 @ W2.T
+    z2 += b2
+    h2 = np.maximum(z2, 0.0)
+    logits = h2 @ W3.T
+    logits += b3
+    return logits, h1, h2
+
+def _bwd_pol(Ws, o, h1, h2, dlogits):
+    W1, b1, W2, b2, W3, b3 = Ws
+    gW3 = dlogits.T @ h2
+    gb3 = dlogits.sum(axis=0)
+    dz2 = dlogits @ W3
+    dz2 *= (h2 > 0)
+    gW2 = dz2.T @ h1
+    gb2 = dz2.sum(axis=0)
+    dz1 = dz2 @ W2
+    dz1 *= (h1 > 0)
+    gW1 = dz1.T @ o
+    gb1 = dz1.sum(axis=0)
+    return [gW1, gb1, gW2, gb2, gW3, gb3]
+
+def _fwd_val(Ws, o):
+    W1, b1, W2, b2, W3, b3 = Ws
+    z1 = o @ W1.T
+    z1 += b1
+    h1 = np.tanh(z1)
+    z2 = h1 @ W2.T
+    z2 += b2
+    h2 = np.tanh(z2)
+    v = h2 @ W3[0] + b3[0]
+    return v, h1, h2
+
+def _bwd_val(Ws, o, h1, h2, dv):
+    W1, b1, W2, b2, W3, b3 = Ws
+    gW3 = (dv @ h2)[None, :]
+    gb3 = np.array([dv.sum()])
+    dz2 = np.outer(dv, W3[0])
+    dz2 *= 1 - h2 * h2
+    gW2 = dz2.T @ h1
+    gb2 = dz2.sum(axis=0)
+    dz1 = dz2 @ W2
+    dz1 *= 1 - h1 * h1
+    gW1 = dz1.T @ o
+    gb1 = dz1.sum(axis=0)
+    return [gW1, gb1, gW2, gb2, gW3, gb3]
+
+def value_raw(value, obs, dtype=np.float32):
+    """Raw-unit values for a whole batch in one pass."""
+    Wv = [p.astype(dtype) for p in value.params()]
+    v = _fwd_val(Wv, np.ascontiguousarray(obs, dtype=dtype))[0]
+    return value.denormalize(v.astype(np.float64))
 
 def ppo_update(policy, value, pol_opt, val_opt, obs, actions, old_logp, adv, returns,
                epochs=4, minibatch=4096, clip=0.2, ent_coef=0.01, vf_coef=0.5,
-               max_grad_norm=1.0, rng=None, ref_policy=None, kl_ref_coef=0.0):
-    """PPO, optionally anchored to a frozen reference policy."""
+               max_grad_norm=1.0, rng=None, ref_policy=None, kl_ref_coef=0.0,
+               mask=None, dtype=np.float32):
+    """PPO over the allowed actions, optionally anchored to a frozen reference policy.
+
+    mask is (n, N_ACTIONS) bool: the actions the actor could pick at each step.
+    The math runs in float32; the weights and Adam state stay float64.
+    """
     rng = rng or np.random.default_rng(0)
     n = obs.shape[0]
-
-    adv_n = (adv - adv.mean()) / (adv.std() + 1e-8)
+    f = dtype
+    obs = np.ascontiguousarray(obs, dtype=f)
+    adv_n = ((adv - adv.mean()) / (adv.std() + 1e-8)).astype(f)
+    old_logp = np.asarray(old_logp).astype(f)
+    ret_n_all = value.normalize(returns).astype(f)     # the scale is fixed during the update
+    bias = None
+    if mask is not None:
+        bias = np.where(mask, 0.0, MASKED).astype(f)
+        bias[np.arange(n), actions] = 0.0              # the action taken was allowed
 
     stats = {"pol_loss": 0.0, "val_loss": 0.0, "entropy": 0.0, "kl": 0.0,
              "clipfrac": 0.0, "kl_ref": 0.0, "nupd": 0}
     anchored = ref_policy is not None and kl_ref_coef > 0.0
+    if anchored:
+        Wr = [p.astype(f) for p in ref_policy.params()]
+        rl = _fwd_pol(Wr, obs)[0]
+        if bias is not None:
+            rl += bias
+        ref_lp = log_softmax(rl)                       # once per batch
 
+    acc = np.zeros(6)
     for _ in range(epochs):
         idx = rng.permutation(n)
+        O = obs[idx]
+        A = actions[idx]
+        OLP = old_logp[idx]
+        AD = adv_n[idx]
+        RN = ret_n_all[idx]
+        B = bias[idx] if bias is not None else None
+        RL = ref_lp[idx] if anchored else None
         for start in range(0, n, minibatch):
-            mb = idx[start:start + minibatch]
-            if len(mb) < 2:
+            end = min(start + minibatch, n)
+            m = end - start
+            if m < 2:
                 continue
-            o, a = obs[mb], actions[mb]
-            olp, ad, ret = old_logp[mb], adv_n[mb], returns[mb]
+            o = O[start:end]
+            a = A[start:end]
+            olp = OLP[start:end]
+            ad = AD[start:end]
+            rows = np.arange(m)
 
-            logits, cache = policy.forward(o)
+            Wp = [p.astype(f) for p in policy.params()]
+            logits, h1, h2 = _fwd_pol(Wp, o)
+            if B is not None:
+                logits += B[start:end]
             logp_all = log_softmax(logits)
-            logp = logp_all[np.arange(len(mb)), a]
+            logp = logp_all[rows, a]
             p_all = np.exp(logp_all)
 
             ratio = np.exp(logp - olp)
@@ -212,50 +308,60 @@ def ppo_update(policy, value, pol_opt, val_opt, obs, actions, old_logp, adv, ret
             clipped = np.clip(ratio, 1 - clip, 1 + clip) * ad
             use_unclipped = unclipped <= clipped        # PPO takes the min
 
-            # d/dlogp of -mean(min(...)) ; the clipped branch has zero gradient
+            # d/dlogp of -mean(min(...)); the clipped branch has zero gradient
             # wherever the ratio is outside the trust region
-            dlogp = np.where(use_unclipped, -ad * ratio, 0.0) / len(mb)
+            dlogp = np.where(use_unclipped, -ad * ratio, 0.0) / m
 
-            entropy = -(p_all * logp_all).sum(axis=1)
-            # dH/dz_j = -p_j (log p_j + H)
-            dent = -p_all * (logp_all + entropy[:, None])
-
+            # masked actions have p = 0, so they add nothing to either term
+            plogp = p_all * logp_all
+            entropy = -plogp.sum(axis=1)
             # dlogp_i/dlogits_j = delta_{j,a_i} - p_j
             dlogits = -p_all * dlogp[:, None]
-            dlogits[np.arange(len(mb)), a] += dlogp
-            dlogits += (-ent_coef) * dent / len(mb)
+            dlogits[rows, a] += dlogp
+            # entropy bonus: -ent_coef * dH/dz / m, with dH/dz = -p (log p + H)
+            dlogits += (ent_coef / m) * (plogp + p_all * entropy[:, None])
 
             if anchored:
                 # KL(pi || ref) = sum_a p_a (log p_a - log ref_a), so
                 # dKL/dz_j = p_j * ((log p_j - log ref_j) - KL)
-                ref_logp_all = log_softmax(ref_policy.forward(o)[0])
-                d = logp_all - ref_logp_all
-                kl_ref = (p_all * d).sum(axis=1)
-                dlogits += kl_ref_coef * (p_all * (d - kl_ref[:, None])) / len(mb)
-                stats["kl_ref"] += float(kl_ref.mean())
+                dref = logp_all - RL[start:end]
+                pd = p_all * dref
+                kl_ref = pd.sum(axis=1)
+                dlogits += (kl_ref_coef / m) * (pd - p_all * kl_ref[:, None])
+                acc[5] += float(kl_ref.mean())
 
-            gp = policy.backward(cache, dlogits)
+            gp = [g.astype(np.float64) for g in _bwd_pol(Wp, o, h1, h2, dlogits)]
             clip_grads(gp, max_grad_norm)
             pol_opt.step(policy.params(), gp)
 
-            v, vcache = value.forward(o)
-            ret_n = value.normalize(ret)
-            dv = vf_coef * 2.0 * (v - ret_n) / len(mb)
-            gv = value.backward(vcache, dv)
+            Wv = [p.astype(f) for p in value.params()]
+            v, vh1, vh2 = _fwd_val(Wv, o)
+            err = v - RN[start:end]
+            dv = (vf_coef * 2.0 / m) * err
+            gv = [g.astype(np.float64) for g in _bwd_val(Wv, o, vh1, vh2, dv)]
             clip_grads(gv, max_grad_norm)
             val_opt.step(value.params(), gv)
 
-            stats["pol_loss"] += float(-np.minimum(unclipped, clipped).mean())
-            stats["val_loss"] += float(((v - ret_n) ** 2).mean())
-            stats["entropy"] += float(entropy.mean())
-            stats["kl"] += float((olp - logp).mean())
-            stats["clipfrac"] += float((np.abs(ratio - 1.0) > clip).mean())
+            acc[0] += float(-np.minimum(unclipped, clipped).mean())
+            acc[1] += float((err * err).mean())
+            acc[2] += float(entropy.mean())
+            acc[3] += float((olp - logp).mean())
+            acc[4] += float((np.abs(ratio - 1.0) > clip).mean())
             stats["nupd"] += 1
 
     k = max(stats["nupd"], 1)
-    for key in ("pol_loss", "val_loss", "entropy", "kl", "clipfrac", "kl_ref"):
-        stats[key] /= k
+    for i, key in enumerate(("pol_loss", "val_loss", "entropy", "kl", "clipfrac", "kl_ref")):
+        stats[key] = acc[i] / k
     return stats
+
+def fit_inputs(W, dim):
+    """A first-layer weight matrix widened (new inputs start at zero weight) or cut to dim inputs."""
+    if W.shape[1] == dim:
+        return W
+    out = np.zeros((W.shape[0], dim))
+    k = min(dim, W.shape[1])
+    out[:, :k] = W[:, :k]
+    return out
 
 def clip_grads(grads, max_norm):
     total = np.sqrt(sum(float((g * g).sum()) for g in grads))

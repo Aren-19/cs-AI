@@ -5,7 +5,7 @@ import sys
 
 import numpy as np
 
-from rollout import Track, OBS_DIM, LOOKAHEAD, PROBE_DIM, WISH_DIM, NO_LINE_SHIFT
+from rollout import Track, OBS_DIM, LOOKAHEAD, NO_LINE_SHIFT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
@@ -83,8 +83,8 @@ def main():
     p50 = float(np.percentile(diff, 50))
     p99 = float(np.percentile(diff, 99))
 
-    print("rows: %d   obs dim: %d (%d centerline checked, %d probe passed through), %d shifted line(s)"
-          % (len(rows), OBS_DIM, n_center, PROBE_DIM + WISH_DIM, shifted))
+    print("rows: %d   obs dim: %d (%d centerline checked, %d probe and own state passed through), %d shifted line(s)"
+          % (len(rows), OBS_DIM, n_center, OBS_DIM - n_center, shifted))
     print("diff  p50 %.2e   p99 %.2e   max %.2e" % (p50, p99, diff.max()))
     worst_col = int(np.argmax(diff.max(axis=0)))
     print("worst column: %d (max %.3e)" % (worst_col, diff[:, worst_col].max()))

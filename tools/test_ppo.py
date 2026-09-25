@@ -2,7 +2,8 @@
 
 import numpy as np
 
-from ppo import (Policy, Value, log_softmax, POL_TOTAL, H1, H2, compute_gae)
+from ppo import (Policy, Value, Adam, log_softmax, POL_TOTAL, H1, H2, compute_gae,
+                 ppo_update)
 from rollout import OBS_DIM, N_ACTIONS
 
 def ppo_scalar_loss(policy, o, a, olp, ad, clip=0.2, ent_coef=0.01):
@@ -146,6 +147,40 @@ def check_flat_layout():
     print("   weight layout round-trips (%d floats)" % POL_TOTAL)
     return 0.0
 
+def _one_update(mask, seed=4):
+    rng = np.random.default_rng(seed)
+    n = 64
+    o = rng.normal(0, 1, (n, OBS_DIM))
+    a = rng.integers(0, 4, n)                     # only the first four actions are ever taken
+    olp = rng.normal(-1.5, 0.1, n)
+    ad = rng.normal(0, 1, n)
+    ret = rng.normal(0, 1, n)
+    pol = Policy(np.random.default_rng(3))
+    pol.W3 = rng.normal(0, 0.3, pol.W3.shape)
+    val = Value(np.random.default_rng(5))
+    before = [p.copy() for p in pol.params()]
+    ppo_update(pol, val, Adam(pol.shapes()), Adam(val.shapes()), o, a, olp, ad, ret,
+               epochs=1, minibatch=n, mask=mask, dtype=np.float64,
+               rng=np.random.default_rng(0))
+    return before, pol
+
+def check_mask():
+    n = 64
+    everything = np.ones((n, N_ACTIONS), dtype=bool)
+    _b, p_all = _one_update(everything)
+    _b, p_none = _one_update(None)
+    for x, y in zip(p_all.params(), p_none.params()):
+        assert np.allclose(x, y), "an all-allowed mask changed the update"
+
+    few = np.zeros((n, N_ACTIONS), dtype=bool)
+    few[:, :4] = True
+    before, pol = _one_update(few)
+    moved = np.abs(pol.b3 - before[5])
+    assert np.all(moved[4:] == 0.0), "a masked action's logit moved"
+    assert np.any(moved[:4] > 0.0)
+    print("   masked actions get no gradient, a full mask changes nothing")
+    return 0.0
+
 if __name__ == "__main__":
     print("checking policy gradients...")
     check_policy()
@@ -153,6 +188,8 @@ if __name__ == "__main__":
     check_value()
     print("checking GAE...")
     check_gae()
+    print("checking action masks...")
+    check_mask()
     print("checking weight layout...")
     check_flat_layout()
     print("\nall gradient checks passed")

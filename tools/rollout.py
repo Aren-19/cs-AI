@@ -1,7 +1,9 @@
-"""Read trajectory batches and rebuild the observations the policy saw.
+"""Read trajectory batches.
 
-Must reproduce csai_track.inc exactly, including its windowed nearest-point
-search. tools/check_obs.py verifies the two numerically.
+Batches now carry the observation the policy acted on and the actions it was
+allowed. Older batches only carry positions, so for those the observation is
+rebuilt here, which must reproduce csai_track.inc exactly, including its
+windowed nearest-point search. tools/check_obs.py verifies the two numerically.
 """
 
 import math
@@ -16,17 +18,24 @@ LOOKAHEAD      = len(LOOK_OFFSETS)
 PROBE_RAYS     = 8          # 5 down-facing, then left, right, forward
 PROBE_DIM      = PROBE_RAYS + 3
 WISH_DIM       = 0          # previous action; removed - BC latched onto it
-OBS_DIM        = 7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM
+OBS_EXTRA      = 7 + 3 * LOOKAHEAD + PROBE_DIM + WISH_DIM
+EXTRA_DIM      = 8          # the policy's own state: mouse, keys, zone; logged by the plugin
+OBS_DIM        = OBS_EXTRA + EXTRA_DIM
 
 # must match csai_policy.inc
 N_ACTIONS = 17   # 2 sides x 8 trims, plus coast
+MASK_ALL  = (1 << N_ACTIONS) - 1
 
 EP_FELL, EP_FINISHED, EP_TIMEOUT, EP_STUCK, EP_WINDUP = 1, 2, 3, 4, 5
 OUTCOME_NAMES = {1: "fell", 2: "finished", 3: "timeout", 4: "stuck", 5: "windup"}
 
-# 9 core fields + the probe, which needs engine collision and so is logged
-# rather than recomputed here.
-REC_FLOATS = 9 + PROBE_DIM + 1   # +1: held wish angle
+# Batch file layout. Format 2 opens with a file header and logs each step as
+# 9 core fields, the observation, and the allowed-action mask (raw int bits).
+# Format 1 had no header and logged only the probe and the wish angle.
+BATCH_MAGIC = 0x42534343
+FILE_HEADER = 16
+REC_FLOATS  = 9 + OBS_DIM + 1
+REC_FLOATS_V1 = 9 + PROBE_DIM + 1
 
 # Per-episode shift of the line shown to the policy (csai_track.inc g_fLineOff).
 LINE_PARAMS = 8
@@ -156,14 +165,17 @@ class Track(object):
         return obs
 
 class Episode(object):
-    __slots__ = ("outcome", "start_state", "best_s", "steps", "line")
+    __slots__ = ("outcome", "start_state", "best_s", "steps", "line", "obs", "mask")
 
-    def __init__(self, outcome, start_state, best_s, steps, line=NO_LINE_SHIFT):
+    def __init__(self, outcome, start_state, best_s, steps, line=NO_LINE_SHIFT,
+                 obs=None, mask=None):
         self.outcome = outcome
         self.start_state = start_state
         self.best_s = best_s
-        self.steps = steps            # (n, REC_FLOATS)
+        self.steps = steps            # (n, 9+): pos, vel, action, logp, reward, ...
         self.line = line
+        self.obs = obs                # (n, OBS_DIM) float32 as logged, or None for format 1
+        self.mask = mask              # (n,) allowed-action bits, or None
 
     @property
     def n(self):
@@ -183,26 +195,41 @@ def read_batch(path):
     episodes = []
     off = 0
     total = len(blob)
+    rec, obs_dim = REC_FLOATS_V1, 0
+    if total >= FILE_HEADER and struct.unpack_from("<I", blob, 0)[0] == BATCH_MAGIC:
+        _magic, version, rec, obs_dim = struct.unpack_from("<Iiii", blob, 0)
+        if version != 2 or obs_dim != OBS_DIM or rec != 9 + obs_dim + 1:
+            raise ValueError("%s: batch format %d with %d observations, this reader wants %d"
+                             % (os.path.basename(path), version, obs_dim, OBS_DIM))
+        off = FILE_HEADER
     while off + HEADER_BYTES <= total:
         n, outcome, start_state = struct.unpack_from("<iii", blob, off)
         best_s = struct.unpack_from("<f", blob, off + 12)[0]
         line = struct.unpack_from("<%df" % LINE_PARAMS, blob, off + 16)
         off += HEADER_BYTES
-        need = n * REC_FLOATS * 4
+        need = n * rec * 4
         if n < 0 or off + need > total:
             raise ValueError("truncated batch %s at offset %d (episode claims %d steps)"
                              % (os.path.basename(path), off, n))
-        steps = np.frombuffer(blob, dtype="<f4", count=n * REC_FLOATS, offset=off)
-        steps = steps.reshape(n, REC_FLOATS).astype(np.float64)
+        raw = np.frombuffer(blob, dtype="<f4", count=n * rec, offset=off).reshape(n, rec)
         off += need
-        episodes.append(Episode(outcome, start_state, best_s, steps, line))
+        if obs_dim:
+            obs = np.array(raw[:, 9:9 + obs_dim], dtype=np.float32)
+            mask = np.ascontiguousarray(raw[:, 9 + obs_dim]).view("<i4").astype(np.int64)
+            episodes.append(Episode(outcome, start_state, best_s,
+                                    raw[:, :9].astype(np.float64), line, obs, mask))
+        else:
+            episodes.append(Episode(outcome, start_state, best_s,
+                                    raw.astype(np.float64), line))
 
     if off != total:
         raise ValueError("trailing %d bytes in %s" % (total - off, os.path.basename(path)))
     return episodes
 
 def episode_obs(track, ep):
-    """Rebuild the observation sequence, reproducing the plugin's hint evolution."""
+    """The observation sequence: as logged, or rebuilt for a format 1 batch."""
+    if ep.obs is not None:
+        return ep.obs
     n = ep.n
     obs = np.zeros((n, OBS_DIM), dtype=np.float64)
     if n == 0:
@@ -224,28 +251,38 @@ def episode_obs(track, ep):
             obs[i, base + PROBE_DIM + 1] = math.sin(wish)
     return obs
 
+def episode_mask(ep):
+    """Allowed-action bits per step; everything for a format 1 batch."""
+    if ep.mask is not None:
+        return ep.mask
+    return np.full(ep.n, MASK_ALL, dtype=np.int64)
+
+def mask_bool(bits):
+    """(n,) int bits -> (n, N_ACTIONS) bool."""
+    return ((np.asarray(bits)[:, None] >> np.arange(N_ACTIONS)) & 1).astype(bool)
+
 def load_batch(track, path):
-    """Returns (obs, actions, old_logp, rewards, dones, episode list)."""
+    """Returns (obs, actions, old_logp, rewards, dones, mask bits, episode list)."""
     eps = read_batch(path)
-    obs_l, act_l, logp_l, rew_l, done_l = [], [], [], [], []
+    obs_l, act_l, logp_l, rew_l, done_l, mask_l = [], [], [], [], [], []
     for ep in eps:
         if ep.n == 0:
             continue
-        o = episode_obs(track, ep)
-        obs_l.append(o)
+        obs_l.append(episode_obs(track, ep))
         act_l.append(ep.steps[:, 6].astype(np.int64))
         logp_l.append(ep.steps[:, 7])
         rew_l.append(ep.steps[:, 8])
+        mask_l.append(episode_mask(ep))
         d = np.zeros(ep.n, dtype=np.float64)
         d[-1] = 1.0 if ep.terminal else 0.0
         done_l.append(d)
 
     if not obs_l:
         return (np.zeros((0, OBS_DIM)), np.zeros(0, dtype=np.int64),
-                np.zeros(0), np.zeros(0), np.zeros(0), eps)
+                np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0, dtype=np.int64), eps)
 
     return (np.concatenate(obs_l), np.concatenate(act_l), np.concatenate(logp_l),
-            np.concatenate(rew_l), np.concatenate(done_l), eps)
+            np.concatenate(rew_l), np.concatenate(done_l), np.concatenate(mask_l), eps)
 
 def batch_stats(eps):
     if not eps:

@@ -6,11 +6,15 @@ import shutil
 import sys
 import time
 
+# The networks are small: one thread beats a thread pool at this size.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 import numpy as np
 
-from ppo import Policy, Value, Adam, compute_gae, ppo_update, write_weights, POL_TOTAL
-from rollout import (Track, read_batch, episode_obs, load_state_arclengths,
-                     OUTCOME_NAMES, OBS_DIM, N_ACTIONS, EP_FINISHED)
+from ppo import (Policy, Value, Adam, compute_gae, ppo_update, write_weights, value_raw,
+                 fit_inputs, POL_TOTAL)
+from rollout import (Track, read_batch, episode_obs, episode_mask, mask_bool,
+                     load_state_arclengths, OUTCOME_NAMES, OBS_DIM, N_ACTIONS, EP_FINISHED)
 
 CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
 DATA    = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
@@ -84,7 +88,7 @@ def main():
     ap.add_argument("--max-lag", dest="max_lag", type=int, default=12,
                     help="drop batches this many generations old; 0 keeps all")
     ap.add_argument("--resume", action="store_true")
-    ap.add_argument("--kl-ref", dest="kl_ref", type=float, default=0.03,
+    ap.add_argument("--kl-ref", dest="kl_ref", type=float, default=0.0,
                     help="penalty on moving away from the anchor policy; 0 disables")
     ap.add_argument("--ref-ckpt", dest="ref_ckpt",
                     default=os.path.join(os.path.dirname(__file__), "..", "data", "ckpt_anchor.npz"))
@@ -127,11 +131,19 @@ def main():
     pol_opt = Adam(policy.shapes(), lr=args.lr)
     val_opt = Adam(value.shapes(), lr=args.vlr)
     gen = 0
+    ent_gen0 = None            # generation the entropy anneal counts from
 
     if args.resume and os.path.exists(args.ckpt):
         # Read and closed at once: an open handle stops Windows replacing the file.
         with np.load(args.ckpt) as f:
             z = {k: f[k] for k in f.files}
+        # A checkpoint from before the observation grew gets zero weights on the
+        # new inputs, so it acts exactly as before until it learns to use them.
+        for key in ("p0", "v0"):
+            if key in z and z[key].ndim == 2 and z[key].shape[1] != OBS_DIM:
+                print("checkpoint %s: %s takes %d inputs, widening to %d"
+                      % (args.ckpt, key, z[key].shape[1], OBS_DIM))
+                z[key] = fit_inputs(z[key], OBS_DIM)
         for i, p in enumerate(policy.params()):
             if z["p%d" % i].shape != p.shape:
                 print("checkpoint %s does not fit this build: policy tensor %d is "
@@ -156,20 +168,24 @@ def main():
         for i, p in enumerate(value.params()):
             p[...] = z["v%d" % i]
         gen = int(z["gen"])
+        if "ent_gen0" in z:
+            ent_gen0 = int(z["ent_gen0"])
         if "ret_mean" in z:
             value.ret_mean = float(z["ret_mean"])
             value.ret_var = float(z["ret_var"])
             value.ret_count = float(z["ret_count"])
         print("resumed from %s at generation %d" % (args.ckpt, gen))
 
-    ent_gen0 = gen
+    if ent_gen0 is None:
+        ent_gen0 = gen
 
     ref_policy = None
     if args.kl_ref > 0.0 and os.path.exists(args.ref_ckpt):
         ref_policy = Policy(np.random.default_rng(args.seed))
         with np.load(args.ref_ckpt) as z:
             for i, p in enumerate(ref_policy.params()):
-                p[...] = z["p%d" % i]
+                w = z["p%d" % i]
+                p[...] = fit_inputs(w, OBS_DIM) if i == 0 else w
         print("anchored to %s (kl_ref %.4f)" % (args.ref_ckpt, args.kl_ref))
     elif args.kl_ref > 0.0:
         print("no anchor at %s - running unanchored" % args.ref_ckpt)
@@ -283,7 +299,7 @@ def main():
 
         t0 = time.time()
 
-        obs_l, act_l, olp_l, adv_l, ret_l = [], [], [], [], []
+        obs_l, act_l, olp_l, mask_l, used = [], [], [], [], []
         counts = {"fell": 0, "finished": 0, "timeout": 0, "stuck": 0}
         progs = []
 
@@ -296,21 +312,11 @@ def main():
             counts[OUTCOME_NAMES.get(ep.outcome, "stuck")] = \
                 counts.get(OUTCOME_NAMES.get(ep.outcome, "stuck"), 0) + 1
 
-            o = episode_obs(track, ep)
-            v, _ = value.forward_raw(o)
-            rew = ep.steps[:, 8]
-            done = np.zeros(ep.n)
-            done[-1] = 1.0 if ep.terminal else 0.0
-
-            last_v = 0.0 if ep.terminal else float(v[-1])
-            adv, ret = compute_gae(rew, v, done, last_value=last_v,
-                                   gamma=args.gamma, lam=args.lam)
-
-            obs_l.append(o)
+            obs_l.append(episode_obs(track, ep))
             act_l.append(ep.steps[:, 6].astype(np.int64))
             olp_l.append(ep.steps[:, 7])
-            adv_l.append(adv)
-            ret_l.append(ret)
+            mask_l.append(episode_mask(ep))
+            used.append(ep)
             if ep.start_state == 0:
                 run0 += 1
                 if ep.outcome == EP_FINISHED:
@@ -328,6 +334,22 @@ def main():
         obs = np.concatenate(obs_l)
         act = np.concatenate(act_l)
         olp = np.concatenate(olp_l)
+        mask = mask_bool(np.concatenate(mask_l))
+
+        # One value pass for the whole batch, then advantages per episode.
+        v_all = value_raw(value, obs)
+        adv_l, ret_l = [], []
+        off = 0
+        for ep in used:
+            v = v_all[off:off + ep.n]
+            off += ep.n
+            done = np.zeros(ep.n)
+            done[-1] = 1.0 if ep.terminal else 0.0
+            last_v = 0.0 if ep.terminal else float(v[-1])
+            a_, r_ = compute_gae(ep.steps[:, 8], v, done, last_value=last_v,
+                                 gamma=args.gamma, lam=args.lam)
+            adv_l.append(a_)
+            ret_l.append(r_)
         adv = np.concatenate(adv_l)
         ret = np.concatenate(ret_l)
 
@@ -336,7 +358,7 @@ def main():
         stats = ppo_update(policy, value, pol_opt, val_opt, obs, act, olp, adv, ret,
                            epochs=args.epochs, minibatch=args.minibatch,
                            clip=args.clip, ent_coef=ent_now, rng=rng,
-                           ref_policy=ref_policy, kl_ref_coef=args.kl_ref)
+                           ref_policy=ref_policy, kl_ref_coef=args.kl_ref, mask=mask)
 
         gen += 1
         write_weights(args.weights, policy, gen)
@@ -365,7 +387,7 @@ def main():
         logf.flush()
 
         tmp = args.ckpt + ".tmp"
-        np.savez(tmp, gen=gen,
+        np.savez(tmp, gen=gen, ent_gen0=ent_gen0,
                  ret_mean=value.ret_mean, ret_var=value.ret_var, ret_count=value.ret_count,
                  **{"p%d" % i: p for i, p in enumerate(policy.params())},
                  **{"v%d" % i: p for i, p in enumerate(value.params())})

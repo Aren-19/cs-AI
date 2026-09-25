@@ -15,7 +15,11 @@ param(
     [int]$Learned    = 1,       # main: open with the learned wind-up when there is one
     [int]$FrameSkip  = 2,       # must match training
     [double]$DevCost = 0.5,
-    [double]$SwitchCost = 0.15
+    [double]$SwitchCost = 0.15,
+    [double]$MouseAcc = 1.5,    # hands: must match training
+    [double]$MouseMax = 7.0,
+    [int]$MinPress   = 12,
+    [int]$MinCoast   = 6
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +42,8 @@ $a = @(
     '+csai_frameskip', $FrameSkip,
     '+csai_devcost', $DevCost,
     '+csai_switchcost', $SwitchCost,
+    '+csai_mouseacc', $MouseAcc, '+csai_mousemax', $MouseMax,
+    '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast,
     '+csai_bench_timescale', $Timescale,
     '+csai_bench_quit', '1',
     '+csai_bench_delay', '8'

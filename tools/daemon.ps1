@@ -22,6 +22,11 @@ param(
     [string]$Partner = '',         # slot whose policy runs alongside: the wind-up for main, main for a wind-up
     [double]$LearnedMix = 0.0,     # main: share of runs from the start opened by the learned wind-up
     [double]$LineJitter = 0.0,     # shift the line the policy sees by up to this many units, per episode
+    [double]$KlRef = 0.0,          # pull towards the anchor checkpoint; 0 = off
+    [double]$MouseAcc = 1.5,       # run mouse acceleration, deg/tick^2; 0 = view set directly
+    [double]$MouseMax = 7.0,       # air mouse speed, deg/tick
+    [int]$MinPress = 12,           # ticks a strafe key stays down
+    [int]$MinCoast = 6,            # ticks with no key before the next press
     [int]$StallSeconds = 240,      # no new generation for this long counts as a stall
     [int]$SilentSeconds = 600,     # a server quiet this long while others work is restarted
     [int]$EvalEvery = 40,          # generations between evaluations
@@ -150,7 +155,7 @@ function Start-Learner {
             '--weights', $Weights, '--outdir', $OutDir,
             '--ckpt', $Ckpt, '--log', $TrainLog, '--out', $LearnLog)
     if ($EntFinal -gt 0.0) { $la += @('--ent-final', $EntFinal, '--ent-anneal', $EntAnneal) }
-    if ($Slot) { $la += @('--kl-ref', '0') }
+    $la += @('--kl-ref', $KlRef)
     if (Test-Path $Ckpt) { $la += '--resume' }
     $lp = Start-Hidden 'python.exe' $la (Join-Path $Root 'tools')
     if ($lp) { try { $lp.PriorityClass = 'AboveNormal' } catch {} }
@@ -177,6 +182,8 @@ function Start-Actor([string]$level, [int]$id) {
         '+csai_timecost', $TimeCost, '+csai_trimcost', $TrimCost,
         '+csai_finishbonus', $FinishBonus, '+csai_finishfloor', $FinishFloor,
         '+csai_windup', $Windup, '+csai_learnedmix', $LearnedMix, '+csai_linejitter', $LineJitter,
+        '+csai_mouseacc', $MouseAcc, '+csai_mousemax', $MouseMax,
+        '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast,
         '+csai_bench_timescale', $cfg.Timescale,
         '+csai_bench_quit', '0', '+csai_bench_delay', '8'
     )
@@ -207,8 +214,9 @@ function Invoke-Eval {
     try { Copy-Item $Ckpt $EvalCkpt -Force -ErrorAction Stop } catch { Remove-Item $EvalCkpt -ErrorAction SilentlyContinue }
     $ea = @('-Runs', '8', '-Map', $m, '-Greedy', '1', '-Port', $EvalPort,
             '-FrameSkip', $FrameSkip, '-DevCost', $DevCost, '-Windup', $Windup,
-            '-Partner', $Partner,
-            '-Timescale', '20', '-TimeoutSec', '600')
+            '-Partner', $Partner, '-MouseAcc', $MouseAcc, '-MouseMax', $MouseMax,
+            '-MinPress', $MinPress, '-MinCoast', $MinCoast,
+            '-Timescale', '80', '-TimeoutSec', '600')
     if ($Slot) { $ea += @('-Slot', $Slot) }
     return (Start-HiddenPowerShell (Join-Path $Root 'tools\eval.ps1') $ea $Root)
 }
@@ -309,6 +317,18 @@ function Read-EvalResult {
     return [pscustomobject]@{ Gen = $gen; Runs = $runs; Finished = $times.Count; Median = $med }
 }
 
+# How human the evaluated run looks, next to the record on that map.
+function Test-Humanlike([string]$m, [int]$gen) {
+    $tag = if ($Slot) { "${Slot}_gen$gen" } else { "gen$gen" }
+    $rep = Join-Path $Data "replays\$($m)_$tag.replay"
+    if (-not (Test-Path $rep)) { return }
+    $sum = Join-Path $LogDir "humanlike$Sfx.txt"
+    Remove-Item $sum -ErrorAction SilentlyContinue
+    $hp = Start-Hidden 'python.exe' @((Join-Path $Root 'tools\humanlike.py'), $rep, '--map', $m, '--summary', $sum) (Join-Path $Root 'tools')
+    if ($hp) { [void]$hp.WaitForExit(60000) }
+    if (Test-Path $sum) { Write-Log "  looks: $((Get-Content $sum -Raw).Trim())" }
+}
+
 # The first map keeps the plain names; the others add the map to them.
 function Best-Paths([string]$m) {
     $tag = if ($m -eq $Map) { $Sfx } else { "$Sfx.$m" }
@@ -333,6 +353,7 @@ function Update-Best {
     $line = "{0} {1} {2} {3:F3}" -f $r.Gen, $r.Finished, $r.Runs, $r.Median
     Write-Log ("  eval {0} gen {1}: {2}/{3} finished, median {4}" -f $m, $r.Gen, $r.Finished, $r.Runs,
                $(if ($r.Finished) { '{0:N2}s' -f $r.Median } else { '-' }))
+    Test-Humanlike $m $r.Gen
     $better = (-not $b) -or ($r.Finished -gt $b.Finished) -or
               ($r.Finished -eq $b.Finished -and $r.Median -lt $b.Median - 0.001)
     if ($better -and (Test-Path $EvalCkpt)) {

@@ -3,8 +3,12 @@
 #endif
 #define _csai_episode_included
 
-#define EP_REC_FLOATS   (9 + PROBE_DIM + 1)   // +1: held wish angle
-#define EP_MAX_STEPS    4000
+// One step record: pos, vel, action, logp, reward, the observation the policy
+// acted on, and the actions it was allowed (bit mask stored as raw bits).
+#define EP_REC_FLOATS   (9 + OBS_DIM + 1)
+#define EP_MAX_STEPS    8000
+#define BATCH_MAGIC     0x42534343     // "CCSB"
+#define BATCH_VERSION   2
 
 // outcomes
 #define EP_RUNNING   0
@@ -12,7 +16,7 @@
 #define EP_FINISHED  2
 #define EP_TIMEOUT   3
 #define EP_STUCK     4
-#define EP_WINDUP    5   // a wind-up episode reached its handover tick
+#define EP_WINDUP    5   // a wind-up episode, scored on the run it led into
 
 // Which weights file and batch directory this instance uses. Set per run so a
 // second experiment can train at the same time without either seeing the
@@ -25,7 +29,7 @@ bool  g_bEval          = false;
 bool  g_bEvalGreedy    = true;
 bool  g_bScripted      = false;   // hand-coded controller, for interface testing
 int   g_iFrameSkip     = 2;
-float g_fMaxDeviation  = 600.0;    // units off the centerline before we call it a fall
+float g_fMaxDeviation  = 600.0;    // units off the centerline that count as a fall
 
 float g_fDeviationCost = 0.5;
 
@@ -65,7 +69,8 @@ int   g_iEpStuckTicks  = 0;
 int   g_iEpNoProgress  = 0;
 int   g_iObsDump       = 0;        // remaining obs rows to dump for the parity check
 File  g_hObsDumpFile   = null;
-int   g_iEpNoProgMax   = 200;      // ticks without advancing before we give up
+int   g_iEpNoProgMax   = 150;      // ticks without advancing before the run ends
+int   g_iEpStuckMax    = 90;       // ticks standing still on the ground
 float g_fSwitchCost    = 0.40;
 
 float g_fTimeCost      = 0.08;    // per decision
@@ -81,27 +86,58 @@ ArrayList g_hEpBuf = null;
 // boundary, once the reward accumulated while holding that action is known.
 float g_fEpPendPos[3];
 float g_fEpPendVel[3];
-float g_fEpPendProbe[PROBE_DIM];
-float g_fEpPendWish = 90.0;
+float g_fEpPendObs[OBS_DIM];
+int   g_iEpPendMask  = POL_MASK_ALL;
 float g_fEpWishAngle = 90.0;   // = side * (90 + trim)
 
-bool  g_bEpGround   = false;   // wind-up slot: the policy being trained is on the ground
+bool  g_bEpGround   = false;   // wind-up slot: the policy being trained is winding up
 int   g_iEpPreTicks = 0;
 
-// Wind-up: the bot builds its own speed from standing, then jumps. The view
-// turns at a capped rate and a strafe key is held a minimum time, as a person
-// does it: the recorded wind-ups move the view 0.53 deg/tick median, 3.06 at
-// most, and hold a key 16 to 41 ticks.
+// Hands and mouse, limited to what a person does. Measured on the recorded
+// runs: view speed at most 3.2 deg/tick on the ground and 6.8 in the air;
+// view acceleration at most 0.9 on the ground, 2.5 in the start zone air and
+// mostly under 0.6 in the run; a strafe key held 16 ticks or more.
+float g_fMouseAcc      = 1.5;    // in the run, deg/tick^2; 0 = view set straight to the aim, no mouse model
+float g_fMouseMax      = 7.0;    // in the air, deg/tick
+float g_fWindupAcc     = 2.5;    // in the start zone air
+float g_fGroundAcc     = 1.0;
+float g_fGroundMax     = 3.5;
+int   g_iMinPress      = 12;     // ticks a strafe key stays down before it may change or lift
+int   g_iMinCoast      = 6;      // ticks with no key before one may be pressed again
+
+// The mouse eases towards the speed it is asked for, a share of the gap each
+// tick, so a swipe speeds up and settles like a hand instead of snapping.
+#define MOUSE_EASE   0.35        // share of the speed gap closed per tick
+#define MOUSE_AIM    0.3         // run: extra speed per degree the view is off its aim
+
+float g_fMouseYaw      = 0.0;    // the view
+float g_fMouseW        = 0.0;    // its speed, deg/tick
+float g_fMouseAim      = 0.0;    // run: last aim, for how fast the aim itself moves
+bool  g_bMouseAimSet   = false;
+int   g_iKeySide       = 0;      // key down now: +1 = A (left), -1 = D (right), 0 = none
+int   g_iKeyHeld       = 0;      // ticks since the key state last changed
+int   g_iCmdSide       = 0;      // key the policy asked for; the hand lifts it during a reversal
+int   g_iCmdHeld       = 0;      // ticks since that last changed
+int   g_iPhaseTicks    = 0;      // ticks since the current driver took over
+
+// Wind-up: the bot builds its own speed from standing, jumps well inside the
+// start zone, and strafes left and right in the air until it leaves the zone.
+// Each action is a gesture: a key and a mouse speed, turning towards that key.
 int   g_iWindupTicks   = 0;      // >0 = this slot trains the wind-up
-int   g_iWindupMax     = 400;    // ground ticks before takeoff is forced
-float g_fWindupYawCap  = 3.5;    // degrees of view movement per tick
-int   g_iWindupHold    = 12;     // ticks a strafe key must be held
+int   g_iWindupMax     = 400;    // ground ticks before the wind-up counts as failed
+int   g_iWindupAirMax  = 150;    // air ticks in the zone before it counts as failed
+int   g_iWindupHold    = 12;     // ticks a requested side is kept before it may change
 float g_fLearnedMix    = 0.0;    // main slot: share of runs opened by the learned wind-up
 bool  g_bEvalLearned   = true;   // evals open with the learned wind-up when there is one
 
-float g_fWindupYaw     = 0.0;    // the view angle being steered, integrated
-int   g_iWindupHeld    = 0;      // ticks the current side has been held
-int   g_iWindupSide    = 1;
+bool  g_bWindupLearn   = false;  // ...and its decisions are the ones being trained
+int   g_iWindupReqSide = 1;      // side the gesture asks for
+int   g_iWindupReqHeld = 0;      // ticks since the requested side changed
+float g_fWindupTarget  = 0.0;    // commanded mouse speed, deg/tick
+bool  g_bWindupCoast   = false;  // in the air: hands off the keys
+bool  g_bWindupJumped  = false;
+int   g_iWindupAirTicks = 0;
+
 bool  g_bEpLearnedOpen = false;  // main slot: the learned wind-up is driving
 bool  g_bEpFollow      = false;  // wind-up slot: the main policy is flying the run
 int   g_iEpClockTick   = 0;      // tick the timer started on: leaving the start zone
@@ -110,18 +146,23 @@ bool  g_bEpClockOn     = false;
 float g_fStartSpeedCap = 475.0;  // combined speed kept on leaving the start zone, as on the server
 float g_fLineJitter    = 0.0;    // training: how far the line shown to the policy may be shifted sideways
 float g_fEpTakeoffSpeed = 0.0;
+float g_fEpJumpInset   = 0.0;    // for the eval printout: how far inside the zone the jump was
+float g_fEpFailSpeed   = 0.0;    // a failed wind-up: speed and distance to the zone edge when it failed
+float g_fEpFailEdge    = 256.0;
 
-// How a wind-up ended. Only a jump from well inside the start zone is the real
-// technique: the recorded runs jump 28 to 75 units in from its edge and drop off
-// the ledge about 53 ticks later. Walking to the edge instead lets the timer
-// start late, which reads as faster and is not a prestrafe.
-#define TAKEOFF_NONE   0
-#define TAKEOFF_JUMP   1
-#define TAKEOFF_EDGE   2      // walked to the zone edge on the ground
-#define TAKEOFF_DROP   3      // left the ground without jumping
-#define TAKEOFF_LIMIT  4      // never jumped
+// How a wind-up ended. The recorded runs jump 37 to 53 units inside the start
+// zone, spend 43 to 49 ticks in the air there turning 170 to 230 degrees, and
+// leave the zone falling.
+#define TAKEOFF_NONE    0
+#define TAKEOFF_JUMP    1
+#define TAKEOFF_EDGE    2      // walked to the zone edge on the ground
+#define TAKEOFF_DROP    3      // left the ground without jumping
+#define TAKEOFF_LIMIT   4      // never jumped
+#define TAKEOFF_LANDED  5      // came down again inside the zone
+#define TAKEOFF_AIRLONG 6      // stayed in the air in the zone too long
+#define TAKEOFF_EXIT    7      // left the zone: handed over
 int   g_iEpTakeoff     = TAKEOFF_NONE;
-float g_fJumpInset     = 24.0;   // how far inside the zone edge the jump must be
+float g_fJumpInset     = 16.0;   // how far inside the zone edge the jump must be
 int   g_iEpOutcomeRun  = EP_RUNNING;   // how the run itself ended
 int   g_iEpSide = 1;           // strafe side of the decision in flight
 int   g_iEpTrim = 0;
@@ -177,7 +218,14 @@ stock void Ep_OpenBatch()
 	{
 		PrintToServer("[CsAI] could not open batch file %s", path);
 		g_bBatchBroken = true;      // no .done marker for a batch with no data
+		return;
 	}
+	int head[4];
+	head[0] = BATCH_MAGIC;
+	head[1] = BATCH_VERSION;
+	head[2] = EP_REC_FLOATS;
+	head[3] = OBS_DIM;
+	g_hBatchFile.Write(head, 4, 4);
 }
 
 stock int Ep_PickStartState()
@@ -237,8 +285,6 @@ stock float Ep_ScriptedAngle(const float pos[3], const float vel[3])
 	// ramp normal, horizontal part, from the surface probe
 	float probe[PROBE_DIM];
 	Track_BuildProbe(g_iBot, pos, vel, probe);
-	// the probe normal is already in the velocity frame, which is the frame the
-	// climb/descend decision needs - no rotation required
 	float nleft = probe[PROBE_RAYS + 1];
 
 	bool leftClimbs = (nleft < 0.0);
@@ -270,60 +316,93 @@ stock void Ep_PushStep()
 	row[6] = float(g_iEpAction);
 	row[7] = g_fEpLogp;
 	row[8] = g_fEpStepReward;
-	for (int pi = 0; pi < PROBE_DIM; pi++)
-		row[9 + pi] = g_fEpPendProbe[pi];
-	row[9 + PROBE_DIM] = g_fEpPendWish;
+	for (int i = 0; i < OBS_DIM; i++)
+		row[9 + i] = g_fEpPendObs[i];
+	row[9 + OBS_DIM] = view_as<float>(g_iEpPendMask);
 	g_hEpBuf.PushArray(row, EP_REC_FLOATS);
 	g_fEpReturn += g_fEpStepReward;
 }
 
-/** Ground wind-up controls: forward held, a strafe key held a minimum time, and a view that turns at a capped rate. */
-stock void Ep_ApplyGround(int &buttons, float movement[3], float angles[3])
+/** Remembers the decision in flight so it can be written once its reward is known. */
+stock void Ep_Pend(const float obs[OBS_DIM], int mask, int act, float logp, const float pos[3], const float vel[3])
 {
-	if (g_iEpSide != g_iWindupSide && g_iWindupHeld >= g_iWindupHold)
+	for (int i = 0; i < OBS_DIM; i++)
+		g_fEpPendObs[i] = obs[i];
+	g_iEpPendMask = mask;
+	g_iEpAction = act;
+	g_fEpLogp = logp;
+	for (int k = 0; k < 3; k++)
 	{
-		g_iWindupSide = g_iEpSide;
-		g_iWindupHeld = 0;
+		g_fEpPendPos[k] = pos[k];
+		g_fEpPendVel[k] = vel[k];
 	}
-	g_iWindupHeld++;
-	bool useLeft = (g_iWindupSide < 0);
-
-	// Trim picks a turn rate, not an angle: a person sweeps the mouse.
-	static const float kWindupTurn[POL_TRIMS] =
-		{ -3.0, -1.5, -0.75, -0.25, 0.25, 0.75, 1.5, 3.0 };
-	int ti = g_iEpTrim;
-	if (ti < 0) ti = 0;
-	if (ti >= POL_TRIMS) ti = POL_TRIMS - 1;
-	float turn = kWindupTurn[ti];
-	if (turn >  g_fWindupYawCap) turn =  g_fWindupYawCap;
-	if (turn < -g_fWindupYawCap) turn = -g_fWindupYawCap;
-
-	g_fWindupYaw += turn;
-	while (g_fWindupYaw >  180.0) g_fWindupYaw -= 360.0;
-	while (g_fWindupYaw < -180.0) g_fWindupYaw += 360.0;
-
-	angles[0] = 0.0;
-	angles[1] = g_fWindupYaw;
-	angles[2] = 0.0;
-	movement[0] = 450.0;
-	movement[1] = useLeft ? -450.0 : 450.0;
-	movement[2] = 0.0;
-	buttons = (useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_FORWARD;
+	g_iEpSteps++;
 }
 
-stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], float angles[3])
+// ---------------------------------------------------------------- hands ----
+
+stock float Ep_WrapAngle(float a)
 {
-	float speed  = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
-	float velYaw = (speed > 1.0) ? RadToDeg(ArcTangent2(vel[1], vel[0])) : angles[1];
+	while (a >  180.0) a -= 360.0;
+	while (a < -180.0) a += 360.0;
+	return a;
+}
 
-	bool useLeft = (g_fEpWishAngle > 0.0);
+/** Changes the held key, restarting the count of how long it has been held. */
+stock void Ep_SetKey(int side)
+{
+	if (side != g_iKeySide)
+	{
+		g_iKeySide = side;
+		g_iKeyHeld = 0;
+	}
+}
 
-	float viewYaw = velYaw + g_fEpWishAngle + (useLeft ? -90.0 : 90.0);
-	while (viewYaw >  180.0) viewYaw -= 360.0;
-	while (viewYaw < -180.0) viewYaw += 360.0;
+/** Changes the key the policy asks for, restarting the count of how long it has been asked. */
+stock void Ep_SetCmd(int side)
+{
+	if (side != g_iCmdSide)
+	{
+		g_iCmdSide = side;
+		g_iCmdHeld = 0;
+	}
+}
 
+/** Moves the mouse one tick towards a commanded speed, easing in within the acceleration limit. */
+stock void Ep_MouseToward(float target, float acc, float wmax)
+{
+	float dw = (target - g_fMouseW) * MOUSE_EASE;
+	if (dw >  acc) dw =  acc;
+	if (dw < -acc) dw = -acc;
+	g_fMouseW += dw;
+	if (g_fMouseW >  wmax) g_fMouseW =  wmax;
+	if (g_fMouseW < -wmax) g_fMouseW = -wmax;
+	g_fMouseYaw = Ep_WrapAngle(g_fMouseYaw + g_fMouseW);
+}
+
+/** Run: moves the mouse one tick to follow an aim that itself moves with the velocity. */
+stock void Ep_MouseAim(float aimYaw, float acc, float wmax)
+{
+	float aimRate = g_bMouseAimSet ? Ep_WrapAngle(aimYaw - g_fMouseAim) : 0.0;
+	g_fMouseAim = aimYaw;
+	g_bMouseAimSet = true;
+	float e = Ep_WrapAngle(aimYaw - g_fMouseYaw);
+	Ep_MouseToward(aimRate + MOUSE_AIM * e, acc, wmax);
+}
+
+/** The key the hand presses for a commanded side: lifted while the mouse still turns the other way. */
+stock int Ep_HandKey(int cmd)
+{
+	if (cmd != 0 && g_fMouseW * float(cmd) < -0.5)
+		return 0;
+	return cmd;
+}
+
+stock void Ep_UpdatePitch(const float vel[3])
+{
 	if (g_iPitchMode == 1)
 	{
+		float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
 		float vp = -RadToDeg(ArcTangent2(vel[2], (speed > 1.0) ? speed : 1.0));
 		float target = PITCH_GAIN * vp + PITCH_BIAS;
 		if (target < PITCH_MIN) target = PITCH_MIN;
@@ -335,37 +414,295 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 		g_fEpPitch += step;
 	}
 	else if (g_iPitchMode == 2)
-	{
 		g_fEpPitch = g_fPitchFixed;
+	else
+		g_fEpPitch = 0.0;
+}
+
+/** The policy's own state, appended to the observation. */
+stock void Ep_FillExtra(int client, const float pos[3], const float vel[3], float obs[OBS_DIM])
+{
+	float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
+	float off = 0.0;
+	if (speed > 1.0)
+		off = DegToRad(Ep_WrapAngle(g_fMouseYaw - RadToDeg(ArcTangent2(vel[1], vel[0]))));
+
+	obs[OBS_EXTRA + 0] = g_fMouseW / 7.0;
+	obs[OBS_EXTRA + 1] = Sine(off);
+	obs[OBS_EXTRA + 2] = Cosine(off);
+	obs[OBS_EXTRA + 3] = float(g_iCmdSide);
+	obs[OBS_EXTRA + 4] = float((g_iCmdHeld < 48) ? g_iCmdHeld : 48) / 48.0;
+	obs[OBS_EXTRA + 5] = (GetEntityFlags(client) & FL_ONGROUND) ? 1.0 : 0.0;
+	float edge = 0.0, air = 0.0;
+	if (!g_bEpClockOn && g_bZoneLoaded)
+	{
+		edge = Zone_EdgeDistance(pos) / 256.0;
+		if (edge >  1.0) edge =  1.0;
+		if (edge < -1.0) edge = -1.0;
+		air = float(g_iWindupAirTicks) / 50.0;
+		if (air > 2.0) air = 2.0;
+	}
+	obs[OBS_EXTRA + 6] = edge;
+	obs[OBS_EXTRA + 7] = air;
+}
+
+/** Everything the policy sees at a decision: the route, the traced surroundings and its own state. */
+stock void Ep_BuildObservation(int client, const float pos[3], const float vel[3], float obs[OBS_DIM])
+{
+	Track_BuildObs(pos, vel, g_iTrackHint, obs);
+	float probe[PROBE_DIM];
+	Track_BuildProbe(client, pos, vel, probe);
+	for (int pi = 0; pi < PROBE_DIM; pi++)
+		obs[7 + 3 * LOOKAHEAD + pi] = probe[pi];
+	Ep_FillExtra(client, pos, vel, obs);
+}
+
+// --------------------------------------------------------------- wind-up ----
+
+stock float Ep_GestureLevel(bool air, int level)
+{
+	static const float kGround[POL_TRIMS] = { 0.0, 0.4, 0.8, 1.2, 1.6, 2.0, 2.6, 3.2 };
+	static const float kAir[POL_TRIMS]    = { 0.0, 1.5, 2.5, 3.5, 4.5, 5.2, 6.0, 6.8 };
+	if (level < 0) level = 0;
+	if (level >= POL_TRIMS) level = POL_TRIMS - 1;
+	return air ? kAir[level] : kGround[level];
+}
+
+/** Actions the wind-up may take now: a requested side is kept a minimum time. */
+stock int Ep_WindupMask()
+{
+	int mask = POL_MASK_ALL;
+	if (g_iWindupReqHeld < g_iWindupHold)
+	{
+		int side = g_iWindupReqSide;
+		for (int a = 0; a < 2 * POL_TRIMS; a++)
+			if (((a < POL_TRIMS) ? 1 : -1) != side)
+				mask &= ~(1 << a);
+	}
+	return mask;
+}
+
+/** Starts the wind-up from standing: view as spawned, still mouse, no key. */
+stock void Ep_WindupInit(bool learn)
+{
+	float ang[3];
+	GetClientEyeAngles(g_iBot, ang);
+	g_fEpPitch = ang[0];
+	g_fMouseYaw = ang[1];
+	g_fMouseW = 0.0;
+	g_iKeySide = 0;
+	g_iKeyHeld = 0;
+	g_iCmdSide = 0;
+	g_iCmdHeld = 0;
+	g_iWindupReqSide = 1;
+	g_iWindupReqHeld = g_iWindupHold;      // free to pick either side first
+	g_fWindupTarget = 0.0;
+	g_bWindupCoast = false;
+	g_bWindupJumped = false;
+	g_iWindupAirTicks = 0;
+	g_iPhaseTicks = 0;
+	g_bWindupLearn = learn;
+}
+
+/**
+ * One wind-up tick. Returns TAKEOFF_NONE while the wind-up keeps driving,
+ * TAKEOFF_EXIT when the bot leaves the start zone (the handover), or the reason
+ * it failed. Sets the controls for this tick when it keeps driving.
+ */
+stock int Ep_WindupTick(int client, const float pos[3], const float vel[3],
+                        int &buttons, float movement[3], float angles[3])
+{
+	bool onGround = (GetEntityFlags(client) & FL_ONGROUND) != 0;
+	bool air = g_bWindupJumped && !onGround;
+
+	// Checks on the state this tick, before deciding.
+	if (!g_bWindupJumped)
+	{
+		if (!onGround)
+			return TAKEOFF_DROP;
+		if (Zone_EdgeDistance(pos) < g_fJumpInset)
+			return TAKEOFF_EDGE;
+		if (g_iPhaseTicks >= g_iWindupMax)
+			return TAKEOFF_LIMIT;
 	}
 	else
 	{
-		g_fEpPitch = 0.0;
+		if (!g_bZoneLoaded || !Zone_Touching(pos))
+			return TAKEOFF_EXIT;
+		if (onGround && g_iWindupAirTicks > 4)
+			return TAKEOFF_LANDED;
+		if (g_iWindupAirTicks >= g_iWindupAirMax)
+			return TAKEOFF_AIRLONG;
 	}
 
+	bool jumpNow = false;
+	if ((g_iPhaseTicks % g_iFrameSkip) == 0)
+	{
+		if (g_bWindupLearn)
+		{
+			if (g_iEpSteps > 0)
+				Ep_PushStep();
+			g_fEpStepReward = 0.0;
+		}
+
+		float obs[OBS_DIM];
+		Ep_BuildObservation(client, pos, vel, obs);
+		int mask = Ep_WindupMask();
+		float logp;
+		int act = Pol_Act(obs, logp, g_bEval && g_bEvalGreedy,
+		                  g_bWindupLearn ? NET_SELF : NET_PARTNER, mask);
+
+		if (act == POL_COAST)
+		{
+			if (!g_bWindupJumped)
+				jumpNow = true;                 // the jump keeps the current gesture
+			else
+			{
+				g_bWindupCoast = true;          // hands off the keys, mouse settles
+				g_fWindupTarget = 0.0;
+			}
+		}
+		else
+		{
+			int side = (act < POL_TRIMS) ? 1 : -1;
+			if (side != g_iWindupReqSide)
+			{
+				g_iWindupReqSide = side;
+				g_iWindupReqHeld = 0;
+			}
+			g_bWindupCoast = false;
+			// The key decides the turn: A (side +1) turns left, D turns right.
+			g_fWindupTarget = float(side) * Ep_GestureLevel(air || jumpNow, act % POL_TRIMS);
+		}
+
+		if (g_bWindupLearn)
+			Ep_Pend(obs, mask, act, logp, pos, vel);
+	}
+
+	if (jumpNow)
+	{
+		g_bWindupJumped = true;
+		g_iEpTakeoffTick = g_iEpTick;
+		g_fEpTakeoffSpeed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
+	}
+	if (g_bWindupJumped)
+		g_iWindupAirTicks++;
+
+	// The mouse moves with human acceleration towards the commanded speed.
+	bool inAir = g_bWindupJumped;
+	Ep_MouseToward(g_fWindupTarget, inAir ? g_fWindupAcc : g_fGroundAcc,
+	                                inAir ? g_fMouseMax : g_fGroundMax);
+
+	// The key is the gesture's side, lifted while the mouse is still turning the
+	// other way, as a person does on a reversal.
+	Ep_SetCmd(g_bWindupCoast ? 0 : g_iWindupReqSide);
+	int key = Ep_HandKey(g_iCmdSide);
+	Ep_SetKey(key);
+
+	if (inAir)
+		Ep_UpdatePitch(vel);
 	angles[0] = g_fEpPitch;
-	angles[1] = viewYaw;
+	angles[1] = g_fMouseYaw;
+	angles[2] = 0.0;
+	movement[0] = inAir ? 0.0 : 450.0;
+	movement[1] = (key > 0) ? -450.0 : ((key < 0) ? 450.0 : 0.0);
+	movement[2] = 0.0;
+	buttons = (key > 0) ? IN_MOVELEFT : ((key < 0) ? IN_MOVERIGHT : 0);
+	if (!inAir)
+		buttons |= IN_FORWARD;
+	if (jumpNow)
+		buttons = (buttons & ~IN_FORWARD) | IN_JUMP;
+	else if (inAir)
+		buttons |= IN_JUMP | IN_DUCK;
+
+	g_iWindupReqHeld++;
+	g_iKeyHeld++;
+	g_iCmdHeld++;
+	g_iPhaseTicks++;
+	return TAKEOFF_NONE;
+}
+
+// ------------------------------------------------------------------- run ----
+
+/** Actions the run policy may take now: a key stays down, and stays up, a minimum time. */
+stock int Ep_RunMask()
+{
+	int mask = POL_MASK_ALL;
+	if (g_iCmdSide != 0 && g_iCmdHeld < g_iMinPress)
+	{
+		mask &= ~(1 << POL_COAST);
+		for (int a = 0; a < 2 * POL_TRIMS; a++)
+			if (((a < POL_TRIMS) ? 1 : -1) != g_iCmdSide)
+				mask &= ~(1 << a);
+	}
+	else if (g_iCmdSide == 0 && g_iCmdHeld < g_iMinCoast)
+		mask = (1 << POL_COAST);
+	return mask;
+}
+
+stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], float angles[3])
+{
+	float speed  = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
+	float velYaw = (speed > 1.0) ? RadToDeg(ArcTangent2(vel[1], vel[0])) : g_fMouseYaw;
+
+	bool useLeft = (g_fEpWishAngle > 0.0);
+	float aim = Ep_WrapAngle(velYaw + g_fEpWishAngle + (useLeft ? -90.0 : 90.0));
+
+	// The view follows the aim through a mouse with human acceleration; with the
+	// mouse model off it is set directly.
+	if (g_fMouseAcc > 0.0)
+		Ep_MouseAim(aim, g_fMouseAcc, g_fMouseMax);
+	else
+	{
+		g_fMouseW = Ep_WrapAngle(aim - g_fMouseYaw);
+		g_fMouseYaw = aim;
+	}
+	Ep_UpdatePitch(vel);
+
+	Ep_SetCmd(g_bEpCoast ? 0 : (useLeft ? 1 : -1));
+	int key = (g_fMouseAcc > 0.0) ? Ep_HandKey(g_iCmdSide) : g_iCmdSide;
+	Ep_SetKey(key);
+	g_iKeyHeld++;
+	g_iCmdHeld++;
+
+	angles[0] = g_fEpPitch;
+	angles[1] = g_fMouseYaw;
 	angles[2] = 0.0;
 
 	movement[0] = 0.0;
-	movement[1] = g_bEpCoast ? 0.0 : (useLeft ? -450.0 : 450.0);
+	movement[1] = (key > 0) ? -450.0 : ((key < 0) ? 450.0 : 0.0);
 	movement[2] = 0.0;
 
-	buttons = g_bEpCoast ? IN_JUMP : ((useLeft ? IN_MOVELEFT : IN_MOVERIGHT) | IN_JUMP);
+	buttons = IN_JUMP;
+	if (key > 0) buttons |= IN_MOVELEFT;
+	if (key < 0) buttons |= IN_MOVERIGHT;
 }
+
+// --------------------------------------------------------------- scoring ----
 
 /** Terminal reward for a wind-up: how the whole run it led into went. */
 stock float Ep_WindupScore(int outcome)
 {
 	if (!g_bEpFollow)
-		return -30.0;                        // never took off
+	{
+		// A little for speed built and for getting near the zone edge, so a
+		// failure still points somewhere. Always below leaving the zone (-20).
+		float fast = g_fEpFailSpeed / 475.0;
+		if (fast > 1.0) fast = 1.0;
+		float near = 1.0 - g_fEpFailEdge / 256.0;
+		if (near < 0.0) near = 0.0;
+		if (near > 1.0) near = 1.0;
+		if (g_iEpTakeoff == TAKEOFF_LANDED || g_iEpTakeoff == TAKEOFF_AIRLONG)
+			return -25.0 + 2.0 * fast + 2.0 * near;
+		return -30.0 + 2.0 * fast;            // never took off properly
+	}
 
 	float secs = float(g_iEpTick - g_iEpClockTick) * GetTickInterval();
 	if (outcome == EP_FINISHED && g_bEpClockOn && g_fRefTime > 0.0)
 	{
-		// 20 per second against the reference, so a tenth of a second is worth 2.
-		float score = 20.0 * (g_fRefTime - secs) + 10.0;
-		return (score < -10.0) ? -10.0 : score;
+		// +10 at the reference time, higher when faster, always above -10, and
+		// about 0.4 per tenth of a second at 1-2 s slower: never flat.
+		return -10.0 + 20.0 * Exponential(-(secs - g_fRefTime) / 2.0);
 	}
 	float frac = (g_fTrackLength > 0.0) ? (g_fEpBestS - g_fEpStartS) / g_fTrackLength : 0.0;
 	return -20.0 + 10.0 * frac;
@@ -383,13 +720,14 @@ stock void Ep_Finish(int outcome)
 		{
 			static const char kRun[][] = { "running", "fell", "finished", "timed out", "stuck", "wind-up" };
 			static const char kWhy[][] = { "never took off", "", "walked to the zone edge",
-			                               "left the ground without jumping", "never jumped" };
+			                               "left the ground without jumping", "never jumped",
+			                               "came down inside the zone", "stayed in the air too long", "" };
 			if (g_bEpFollow)
-				PrintToServer("[CsAI]  wind-up: %d ground ticks, jumped at %.0f u/s, left the zone %d ticks later, run %s in %.2fs, score %.1f",
-				              g_iEpTakeoffTick, g_fEpTakeoffSpeed, g_iEpClockTick - g_iEpTakeoffTick, kRun[outcome],
+				PrintToServer("[CsAI]  wind-up: %d ground ticks, jumped at %.0f u/s %.0f units inside, %d ticks in the air in the zone, run %s in %.2fs, score %.1f",
+				              g_iEpTakeoffTick, g_fEpTakeoffSpeed, g_fEpJumpInset, g_iWindupAirTicks, kRun[outcome],
 				              float(g_iEpTick - g_iEpClockTick) * GetTickInterval(), terminal);
 			else
-				PrintToServer("[CsAI]  wind-up: %d ground ticks, %s, score %.1f",
+				PrintToServer("[CsAI]  wind-up: %d ticks, %s, score %.1f",
 				              g_iEpTick, kWhy[g_iEpTakeoff], terminal);
 		}
 		outcome = EP_WINDUP;
@@ -409,7 +747,6 @@ stock void Ep_Finish(int outcome)
 	}
 	else if (outcome == EP_FELL || outcome == EP_STUCK)
 		terminal = -1.0;
-
 
 	int n = g_hEpBuf.Length;
 	if (n > 0 && terminal != 0.0)
@@ -454,18 +791,6 @@ stock void Ep_Finish(int outcome)
 	g_iBatchEpisodes++;
 }
 
-/** The view and strafe state a wind-up starts from. */
-stock void Ep_WindupInit()
-{
-	g_iWindupHeld = g_iWindupHold;      // free to pick a side on the first decision
-	g_iWindupSide = 1;
-	g_iEpSide = 1;
-	g_iEpTrim = 0;
-	float ang[3];
-	GetClientEyeAngles(g_iBot, ang);
-	g_fWindupYaw = ang[1];
-}
-
 /** A random slow wave for the line the policy sees this episode; none in evals and wind-up training. */
 stock void Ep_PickLineOffset()
 {
@@ -499,6 +824,7 @@ stock void Ep_Begin()
 		g_iStatMidStart++;
 	UnfreezeBot();
 	g_bEpLearnedOpen = false;
+	g_fEpJumpInset = 0.0;
 
 	// Wind-up slot: from standing, always at the map start.
 	if (g_iWindupTicks > 0)
@@ -506,7 +832,7 @@ stock void Ep_Begin()
 		g_iEpStartState = 0;
 		Pre_Spawn(g_iBot);
 		Ep_Reset();
-		Ep_WindupInit();
+		Ep_WindupInit(true);
 		g_bEpGround = true;
 		return;
 	}
@@ -516,7 +842,7 @@ stock void Ep_Begin()
 	    (g_bEval ? g_bEvalLearned : (Pol_Rand() < g_fLearnedMix)) && Pre_Spawn(g_iBot))
 	{
 		Ep_Reset();
-		Ep_WindupInit();
+		Ep_WindupInit(false);
 		g_bEpLearnedOpen = true;
 		return;
 	}
@@ -528,15 +854,19 @@ stock void Ep_Begin()
 	Ep_Reset();
 }
 
-/** Controller state the air policy starts from. */
+/** Controller state the run policy starts from: it takes over the hands as they are. */
 stock void Ep_ResetControl()
 {
 	g_fEpPitch = PITCH_BIAS;
-	g_iEpSide = 1;
 	g_iEpTrim = 0;
-	g_bEpCoast = false;
+	if (g_iCmdSide != 0)
+		g_iEpSide = g_iCmdSide;
+	else if (g_iEpSide == 0)
+		g_iEpSide = 1;
+	g_bEpCoast = (g_iCmdSide == 0);
+	g_bMouseAimSet = false;
 	g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
-	g_fEpPendWish = g_fEpWishAngle;
+	g_iPhaseTicks = 0;
 }
 
 /** Establish the episode baseline from wherever the bot currently is. */
@@ -575,102 +905,63 @@ stock void Ep_Reset()
 	g_bEpFollow     = false;
 	g_iEpTakeoff    = TAKEOFF_NONE;
 	g_fEpStepReward = 0.0;
+
+	// A fresh start takes the view it was placed with and no key held.
+	float ang[3];
+	GetClientEyeAngles(g_iBot, ang);
+	g_fMouseYaw = ang[1];
+	g_fMouseW = 0.0;
+	g_iKeySide = 0;
+	g_iKeyHeld = g_iMinCoast;
+	g_iCmdSide = 0;
+	g_iCmdHeld = g_iMinCoast;
+	g_iEpSide = 1;
 	Ep_ResetControl();
+	g_bEpCoast = false;
 }
 
-/**
- * One wind-up decision on the ground. Returns false when it hands over: the
- * policy chose to jump, or the bot left the ground or the start zone. The timer
- * starts on that tick, and the air policy jumps from it.
- */
-stock bool Ep_WindupTick(int client, const float pos[3], const float vel[3], bool learn)
+/** The wind-up has left the zone (or failed in the main slot): the run policy takes the hands as they are. */
+stock void Ep_Handover()
 {
-	bool jump = false;
-	if ((g_iEpTick % g_iFrameSkip) == 0)
-	{
-		if (learn)
-		{
-			if (g_iEpSteps > 0)
-				Ep_PushStep();
-			g_fEpStepReward = 0.0;
-		}
-
-		float obs[OBS_DIM];
-		float probe[PROBE_DIM];
-		Track_BuildObs(pos, vel, g_iTrackHint, obs);
-		Track_BuildProbe(client, pos, vel, probe);
-		for (int pi = 0; pi < PROBE_DIM; pi++)
-			obs[7 + 3 * LOOKAHEAD + pi] = probe[pi];
-
-		float logp;
-		int act = Pol_Act(obs, logp, g_bEval && g_bEvalGreedy, learn ? NET_SELF : NET_PARTNER);
-		int prevSide = g_iEpSide;
-		int prevTrim = g_iEpTrim;
-		jump = (act == POL_COAST);
-		Pol_ApplyAction(act, g_iEpSide, g_iEpTrim);
-
-		if (learn)
-		{
-			g_iEpAction = act;
-			g_fEpLogp = logp;
-			if (g_iEpSide != prevSide)
-				g_fEpStepReward -= g_fSwitchCost;
-			else if (g_iEpTrim != prevTrim)
-				g_fEpStepReward -= g_fTrimCost;
-			for (int pi = 0; pi < PROBE_DIM; pi++)
-				g_fEpPendProbe[pi] = probe[pi];
-			g_fEpPendWish = g_fEpWishAngle;
-			g_fEpPendPos[0] = pos[0];
-			g_fEpPendPos[1] = pos[1];
-			g_fEpPendPos[2] = pos[2];
-			g_fEpPendVel[0] = vel[0];
-			g_fEpPendVel[1] = vel[1];
-			g_fEpPendVel[2] = vel[2];
-			g_iEpSteps++;
-		}
-	}
-
-	int why = TAKEOFF_NONE;
-	if (jump)
-		why = TAKEOFF_JUMP;
-	else if (!(GetEntityFlags(client) & FL_ONGROUND))
-		why = TAKEOFF_DROP;
-	else if (Zone_EdgeDistance(pos) < g_fJumpInset)
-		why = TAKEOFF_EDGE;
-	else if (g_iEpTick >= g_iWindupMax)
-		why = TAKEOFF_LIMIT;
-	if (why == TAKEOFF_NONE)
-		return true;
-
-	g_iEpTakeoff = why;
-	g_fEpTakeoffSpeed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
-	return false;
+	Ep_ResetControl();
 }
 
 stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 {
-	// Main slot, learned wind-up: the partner policy drives until takeoff, unrecorded.
+	// Main slot, learned wind-up: the partner policy drives until the bot leaves
+	// the start zone, unrecorded. The run policy's episode starts there.
 	if (g_bEpLearnedOpen)
 	{
 		float p0[3], v0[3];
 		GetClientAbsOrigin(client, p0);
 		GetEntPropVector(client, Prop_Data, "m_vecVelocity", v0);
 		g_iTrackHint = Track_Nearest(p0, g_iTrackHint);
-		if (Ep_WindupTick(client, p0, v0, false))
+		if (!g_bWindupJumped)
+			g_fEpJumpInset = Zone_EdgeDistance(p0);
+		int why = Ep_WindupTick(client, p0, v0, buttons, movement, angles);
+		if (why == TAKEOFF_NONE)
 		{
-			Ep_ApplyGround(buttons, movement, angles);
 			if (g_bEval)
 			{
-				Rec_Tick(client, buttons);
+				Rec_Tick(client, buttons, angles);
 				g_iRecPreFrames++;
 			}
 			g_iEpTick++;
 			return true;
 		}
 		g_bEpLearnedOpen = false;
+
+		// Keep the hands and the view as they are across the reset.
+		float yaw = g_fMouseYaw, w = g_fMouseW, pitch = g_fEpPitch;
+		int key = g_iKeySide, held = g_iKeyHeld, cmd = g_iCmdSide, cmdHeld = g_iCmdHeld;
 		float takeoff = g_fEpTakeoffSpeed;
-		Ep_Reset();                      // the clock starts on this tick
+		Ep_Reset();                      // the run's baseline starts here
+		g_fMouseYaw = yaw; g_fMouseW = w; g_iKeySide = key; g_iKeyHeld = held;
+		g_iCmdSide = cmd; g_iCmdHeld = cmdHeld;
 		g_fEpTakeoffSpeed = takeoff;
+		Ep_Handover();
+		g_fEpPitch = pitch;
+		g_bEpClockOn = false;            // started below, with the speed cap
 	}
 
 	if (g_bPreActive)
@@ -680,12 +971,13 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			// Recorded for the replay; not a training step.
 			if (g_bEval)
 			{
-				Rec_Tick(client, buttons);
+				Rec_Tick(client, buttons, angles);
 				g_iRecPreFrames++;
 			}
 			return true;
 		}
 		Ep_Reset();                      // handover: the baseline starts here
+		g_bEpClockOn = false;
 	}
 
 	float pos[3], vel[3];
@@ -695,17 +987,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	// The timer starts on leaving the start zone, and the server caps the combined
 	// speed kept at that moment. shavit ignores bots, so both are applied here.
 	if (!g_bEpClockOn && !g_bEpGround && !Zone_Touching(pos))
-	{
-		g_bEpClockOn = true;
-		g_iEpClockTick = g_iEpTick;
-		g_iEpPreTicks = g_iEpTick;
-		float sp = GetVectorLength(vel);
-		if (g_fStartSpeedCap > 0.0 && sp > g_fStartSpeedCap)
-		{
-			ScaleVector(vel, g_fStartSpeedCap / sp);
-			TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, vel);
-		}
-	}
+		Ep_StartClock(client, vel);
 
 	g_iTrackHint = Track_Nearest(pos, g_iTrackHint);
 
@@ -740,39 +1022,44 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	if (Ep_CheckEnd(client, s, dist, vel))
 		return false;
 
-	// Wind-up slot: the policy being trained drives the ground phase.
+	// Wind-up slot: the policy being trained winds up and flies the zone.
 	if (g_bEpGround)
 	{
-		if (Ep_WindupTick(client, pos, vel, true))
+		if (!g_bWindupJumped)
+			g_fEpJumpInset = Zone_EdgeDistance(pos);
+		int why = Ep_WindupTick(client, pos, vel, buttons, movement, angles);
+		if (why == TAKEOFF_NONE)
 		{
-			Ep_ApplyGround(buttons, movement, angles);
 			if (g_bEval)
 			{
-				Rec_Tick(client, buttons);
+				Rec_Tick(client, buttons, angles);
 				g_iRecPreFrames++;
 			}
 			g_iEpTick++;
 			return true;
 		}
-		// Anything but a jump from inside the zone is a failed wind-up.
-		if (g_iEpTakeoff != TAKEOFF_JUMP)
+		g_iEpTakeoff = why;
+		g_fEpFailSpeed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
+		g_fEpFailEdge = Zone_EdgeDistance(pos);
+		if (why != TAKEOFF_EXIT)
 		{
 			Ep_End(EP_STUCK);
 			return false;
 		}
 
-		// Takeoff: bank the last wind-up decision, then the main policy flies the
-		// rest frozen, so the wind-up is judged on the run it sets up.
+		// Out of the zone: bank the last wind-up decision, then the main policy
+		// flies the rest frozen, so the wind-up is judged on the run it sets up.
 		if (g_iEpSteps > 0)
 			Ep_PushStep();
 		g_bEpGround = false;
 		g_bEpFollow = true;
-		g_iEpTakeoffTick = g_iEpTick;
 		g_iEpNoProgress = 0;
-		Ep_ResetControl();
+		if (!g_bEpClockOn)
+			Ep_StartClock(client, vel);
+		Ep_Handover();
 	}
 
-	if (((g_iEpTick - g_iEpTakeoffTick) % g_iFrameSkip) == 0)
+	if ((g_iPhaseTicks % g_iFrameSkip) == 0)
 	{
 		if (!g_bEpFollow)
 		{
@@ -782,21 +1069,11 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		}
 
 		float obs[OBS_DIM];
-		Track_BuildObs(pos, vel, g_iTrackHint, obs);
-		Track_BuildProbe(client, pos, vel, g_fEpPendProbe);
-		for (int pi = 0; pi < PROBE_DIM; pi++)
-			obs[7 + 3 * LOOKAHEAD + pi] = g_fEpPendProbe[pi];
-
-#if WISH_DIM > 0
-		float wr = DegToRad(g_fEpWishAngle);
-		obs[7 + 3 * LOOKAHEAD + PROBE_DIM + 0] = Cosine(wr);
-		obs[7 + 3 * LOOKAHEAD + PROBE_DIM + 1] = Sine(wr);
-#endif
-		g_fEpPendWish = g_fEpWishAngle;
+		Ep_BuildObservation(client, pos, vel, obs);
 
 		if (g_iObsDump > 0 && g_hObsDumpFile != null)
 		{
-			char line[1024];
+			char line[1400];
 			Format(line, sizeof(line), "%.6f %.6f %.6f %.6f %.6f %.6f",
 			       pos[0], pos[1], pos[2], vel[0], vel[1], vel[2]);
 			for (int oi = 0; oi < OBS_DIM; oi++)
@@ -814,9 +1091,10 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			}
 		}
 
+		int mask = Ep_RunMask();
 		float logp;
-		int act = g_bEpFollow ? Pol_Act(obs, logp, true, NET_PARTNER)
-		                      : Pol_Act(obs, logp, g_bEval && g_bEvalGreedy, NET_SELF);
+		int act = g_bEpFollow ? Pol_Act(obs, logp, true, NET_PARTNER, mask)
+		                      : Pol_Act(obs, logp, g_bEval && g_bEvalGreedy, NET_SELF, mask);
 
 		if (g_bScripted)
 		{
@@ -844,48 +1122,47 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 					g_fEpStepReward -= g_fTrimCost;
 			}
 		}
-		while (g_fEpWishAngle >  180.0) g_fEpWishAngle -= 360.0;
-		while (g_fEpWishAngle < -180.0) g_fEpWishAngle += 360.0;
+		g_fEpWishAngle = Ep_WrapAngle(g_fEpWishAngle);
 
 		if (!g_bEpFollow)
 		{
-			g_iEpAction = act;
-			g_fEpLogp = logp;
-			g_iEpSteps++;
+			Ep_Pend(obs, mask, act, logp, pos, vel);
 			if (g_bEpClockOn)
 				g_fEpStepReward -= g_fTimeCost;
-
-			g_fEpPendPos[0] = pos[0];
-			g_fEpPendPos[1] = pos[1];
-			g_fEpPendPos[2] = pos[2];
-			g_fEpPendVel[0] = vel[0];
-			g_fEpPendVel[1] = vel[1];
-			g_fEpPendVel[2] = vel[2];
 		}
 	}
 
 	Ep_ApplyAction(vel, buttons, movement, angles);
 
-	// Captured after the action is decoded, so the view angle is the one used.
 	if (g_bEval)
 	{
-		Rec_Tick(client, buttons);
+		Rec_Tick(client, buttons, angles);
 		if (!g_bEpClockOn)
 			g_iRecPreFrames++;
 	}
 
+	g_iPhaseTicks++;
 	g_iEpTick++;
 	return true;
+}
+
+/** The timer starts: note the tick and cap the combined speed as the server does. */
+stock void Ep_StartClock(int client, float vel[3])
+{
+	g_bEpClockOn = true;
+	g_iEpClockTick = g_iEpTick;
+	g_iEpPreTicks = g_iEpTick;
+	float sp = GetVectorLength(vel);
+	if (g_fStartSpeedCap > 0.0 && sp > g_fStartSpeedCap)
+	{
+		ScaleVector(vel, g_fStartSpeedCap / sp);
+		TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, vel);
+	}
 }
 
 /** Ends the episode if the current state is terminal. g_iEpTick ticks have run. */
 stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
 {
-	// Landing again inside the start zone is a bunnyhop there, which the timer blocks.
-	if (g_iWindupTicks > 0 && g_bEpFollow && !g_bEpClockOn && g_iEpTick > g_iEpTakeoffTick + 4
-	    && (GetEntityFlags(client) & FL_ONGROUND))
-		return Ep_End(EP_STUCK);
-
 	float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
 	if (speed < 40.0 && (GetEntityFlags(client) & FL_ONGROUND) && !g_bEpGround)
 		g_iEpStuckTicks++;
@@ -897,7 +1174,7 @@ stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
 		return Ep_End(EP_FINISHED);
 	if (!g_bEpGround && dist > g_fMaxDeviation)
 		return Ep_End(EP_FELL);
-	if (g_iEpStuckTicks > 120 || g_iEpNoProgress > g_iEpNoProgMax)
+	if (g_iEpStuckTicks > g_iEpStuckMax || g_iEpNoProgress > g_iEpNoProgMax)
 		return Ep_End(EP_STUCK);
 	if (g_iEpTick >= g_iEpTickBudget)
 		return Ep_End(EP_TIMEOUT);

@@ -21,3 +21,5 @@ web/offstyles-web/
 web/replay-viewer/
 data/best*.txt
 data/oldtrack_*
+data/weights_*.txt
+data/*_v1/
