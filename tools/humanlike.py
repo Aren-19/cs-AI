@@ -102,7 +102,7 @@ def measure(path, mapname):
         b = btn[air]
         out["no_key"] = float(np.mean(((b & IN_MOVELEFT) == 0) & ((b & IN_MOVERIGHT) == 0)))
     h = key_holds(btn[pre:])
-    if len(h):
+    if len(h) and n - pre > 66:          # a run of a second or more
         out["hold_median"] = float(np.median(h))
         out["short_holds"] = float(np.mean(h <= 2))
         secs = (n - pre) * (r.tickrate and 1.0 / r.tickrate or 0.015)
