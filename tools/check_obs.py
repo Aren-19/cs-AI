@@ -8,7 +8,7 @@ import numpy as np
 from rollout import Track, OBS_DIM, LOOKAHEAD, NO_LINE_SHIFT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+from game import CSTRIKE
 DUMP = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\out\obsdump.txt")
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 

@@ -18,7 +18,7 @@ import numpy as np
 
 from replay import parse_replay
 
-CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+from game import CSTRIKE
 SMDATA  = os.path.join(CSTRIKE, r"addons\sourcemod\data")
 
 IN_JUMP, IN_FORWARD, IN_MOVELEFT, IN_MOVERIGHT = 2, 8, 512, 1024

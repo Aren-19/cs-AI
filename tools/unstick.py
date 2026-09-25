@@ -14,7 +14,7 @@ sys.path.insert(0, HERE)
 from ppo import Policy, Value, Adam, log_softmax, write_weights
 from rollout import Track, OBS_DIM, N_ACTIONS
 
-GAME = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source"
+from game import GAME
 CSTRIKE = os.path.join(GAME, "cstrike")
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 OUT = os.path.join(DATA, "out")

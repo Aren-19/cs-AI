@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Root      = Split-Path -Parent $PSScriptRoot
-$GameRoot  = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source'
+. (Join-Path $PSScriptRoot 'game.ps1')
 $Cstrike   = Join-Path $GameRoot 'cstrike'
 $Scripting = Join-Path $Cstrike  'addons\sourcemod\scripting'
 $Compiler  = Join-Path $Scripting 'spcomp64.exe'

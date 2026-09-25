@@ -11,7 +11,7 @@ sys.path.insert(0, HERE)
 
 from ppo import Policy, write_weights
 
-CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+from game import CSTRIKE
 WEIGHTS = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\weights.txt")
 
 def main():

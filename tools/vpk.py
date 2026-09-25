@@ -200,8 +200,8 @@ class SourceFS(object):
 
 if __name__ == "__main__":
     import sys
-    game = sys.argv[1] if len(sys.argv) > 1 else \
-        r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+    from game import CSTRIKE
+    game = sys.argv[1] if len(sys.argv) > 1 else CSTRIKE
     fs = SourceFS(game)
     print("mounted:", fs.stats())
     for probe in ("materials/brick/brickwall001a.vmt",

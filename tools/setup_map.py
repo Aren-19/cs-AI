@@ -9,7 +9,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+from game import CSTRIKE
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 REPLAYBOT = os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot")
 MAPS = (os.path.join(CSTRIKE, "maps"), os.path.join(CSTRIKE, "download", "maps"))

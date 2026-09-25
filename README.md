@@ -197,7 +197,8 @@ The maps and textures come from the local game install.
 
 ## Requirements
 
-- Counter-Strike: Source with a local server
+- Counter-Strike: Source with a local server. The game is found through Steam;
+  if it lives somewhere Steam does not list, put its folder in `data/game.txt`
 - SourceMod and Metamod on that server, with shavit's bhoptimer
 - Python 3 with numpy
 - A record on each map to train on

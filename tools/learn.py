@@ -16,7 +16,7 @@ from ppo import (Policy, Value, Adam, compute_gae, ppo_update, write_weights, va
 from rollout import (Track, read_batch, episode_obs, episode_mask, mask_bool,
                      load_state_arclengths, OUTCOME_NAMES, OBS_DIM, N_ACTIONS, EP_FINISHED)
 
-CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+from game import CSTRIKE
 DATA    = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 OUTDIR  = os.path.join(DATA, "out")
 WEIGHTS = os.path.join(DATA, "weights.txt")

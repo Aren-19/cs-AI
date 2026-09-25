@@ -14,7 +14,7 @@ sys.path.insert(0, HERE)
 
 from rollout import read_batch, Track, EP_FINISHED, OUTCOME_NAMES
 
-CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+from game import CSTRIKE
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 OUT = os.path.join(DATA, "out")
 TICKRATE = 66.67

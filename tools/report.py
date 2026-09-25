@@ -18,8 +18,7 @@ from rollout import N_ACTIONS
 
 BLOCKS = " .:-=+*#%@"
 
-CSTRIKE = os.path.join(r"C:\Program Files (x86)\Steam\steamapps\common",
-                       "Counter-Strike Source", "cstrike")
+from game import CSTRIKE
 DATA = os.path.join(CSTRIKE, "addons", "sourcemod", "data", "csai")
 REPLAYBOT = os.path.join(CSTRIKE, "addons", "sourcemod", "data", "replaybot", "0")
 

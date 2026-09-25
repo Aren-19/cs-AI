@@ -15,7 +15,7 @@ from rollout import OBS_DIM, N_ACTIONS
 N_TRIMS = (N_ACTIONS - 1) // 2   # 0..N_TRIMS-1 = side +1, then side -1, then coast
 COAST = N_ACTIONS - 1
 
-CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+from game import CSTRIKE
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 DEFAULT_IN = os.path.join(DATA, r"out\surf_demise_bc.txt")
 DEFAULT_WEIGHTS = os.path.join(DATA, "weights.txt")

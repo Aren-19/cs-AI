@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vpk import SourceFS
 from replaystats import stats as replay_stats
 
-CSTRIKE = r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source\cstrike"
+from game import CSTRIKE
 REPLAY_DIRS = [
     os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\replays"),
     os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\0"),

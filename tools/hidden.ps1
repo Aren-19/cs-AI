@@ -79,7 +79,7 @@ function Start-HiddenPowerShell([string]$Script, [object[]]$ArgList = @(), [stri
     return (Start-Hidden 'powershell.exe' $a $WorkingDirectory)
 }
 
-$GameRoot = 'C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Source'
+. (Join-Path $PSScriptRoot 'game.ps1')
 $SrcdsLogDir = Join-Path $GameRoot 'cstrike\logs'
 
 # Every server is LAN only and insecure, so it can never reach VAC.
