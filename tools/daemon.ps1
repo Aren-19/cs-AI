@@ -301,7 +301,10 @@ function Read-EvalResult {
     $gen = 0
     $times = @()
     $runs = 0
+    $fastest = 0.0
+    $record = 0.0
     foreach ($l in $block) {
+        if ($l -match 'best time ([\d.]+)s \(human ([\d.]+)s\)') { $fastest = [double]$Matches[1]; $record = [double]$Matches[2] }
         if ($l -match 'policy gen (\d+)') { $gen = [int]$Matches[1] }
         if ($l -match 'eval run \d+/\d+: (\S+) at [\d.]+% in ([\d.]+)s') {
             $runs++
@@ -314,7 +317,8 @@ function Read-EvalResult {
         $st = @($times | Sort-Object)
         $med = ($st[[int][math]::Floor(($st.Count - 1) / 2)] + $st[[int][math]::Ceiling(($st.Count - 1) / 2)]) / 2
     }
-    return [pscustomobject]@{ Gen = $gen; Runs = $runs; Finished = $times.Count; Median = $med }
+    return [pscustomobject]@{ Gen = $gen; Runs = $runs; Finished = $times.Count; Median = $med
+                              Fastest = $fastest; Record = $record }
 }
 
 # How human the evaluated run looks, next to the record on that map.
@@ -354,6 +358,11 @@ function Update-Best {
     Write-Log ("  eval {0} gen {1}: {2}/{3} finished, median {4}" -f $m, $r.Gen, $r.Finished, $r.Runs,
                $(if ($r.Finished) { '{0:N2}s' -f $r.Median } else { '-' }))
     Test-Humanlike $m $r.Gen
+    if ($r.Fastest -gt 0 -and $r.Record -gt 0 -and $r.Fastest -lt $r.Record) {
+        $msg = "{0}: {1:N3}s against the record {2:N3}s, gen {3}, {4:yyyy-MM-dd HH:mm}" -f $m, $r.Fastest, $r.Record, $r.Gen, (Get-Date)
+        Write-Log "  RECORD BEATEN - $msg"
+        Add-Content -Path (Join-Path $DataDir 'records.txt') -Value $msg -Encoding ascii
+    }
     $better = (-not $b) -or ($r.Finished -gt $b.Finished) -or
               ($r.Finished -eq $b.Finished -and $r.Median -lt $b.Median - 0.001)
     if ($better -and (Test-Path $EvalCkpt)) {

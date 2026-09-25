@@ -270,6 +270,7 @@ def main():
                     help="track point spacing; the policy was trained at 92")
     ap.add_argument("--checkpoints", type=int, default=24)
     ap.add_argument("--check", action="store_true", help="validate; only refreshes the start zone and the reference time")
+    ap.add_argument("--brief", action="store_true", help="leave out the closing advice")
     args = ap.parse_args()
 
     print("== %s ==" % args.map)
@@ -285,7 +286,7 @@ def main():
     replay = find_replay(args.map, args.replay)
     if not replay:
         print("  no replay found for %s" % args.map)
-        print("  run the map once with your timer, or pass --replay <file>")
+        print("  set a time on the map with the timer first, or pass --replay <file>")
         return 1
     print("  source: %s" % replay)
 
@@ -314,8 +315,8 @@ def main():
     if not ok:
         print("NOT ready - see the problems above")
         return 1
-    print("ready. To train on it, add it to -Map in data/daemon_args.txt (and")
-    print("data/daemon_args_windup.txt), separated by a comma, and press start.")
+    if not args.brief:
+        print("ready. To train on it:  CsAI.bat teach %s" % args.map)
     return 0
 
 if __name__ == "__main__":

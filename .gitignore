@@ -23,3 +23,4 @@ data/best*.txt
 data/oldtrack_*
 data/weights_*.txt
 data/*_v1/
+data/records.txt
