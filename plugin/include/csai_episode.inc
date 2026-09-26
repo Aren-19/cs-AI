@@ -127,6 +127,9 @@ int   g_iKeySide       = 0;      // key down now: +1 = A (left), -1 = D (right),
 int   g_iKeyHeld       = 0;      // ticks since the key state last changed
 int   g_iCmdSide       = 0;      // key the policy asked for; the hand lifts it during a reversal
 int   g_iCmdHeld       = 0;      // ticks since that last changed
+bool  g_bEpSideKnown   = false;  // the run's side is a key really held, so changing it is a switch
+bool  g_bEpTrimKnown   = false;  // the run's trim was really chosen, so changing it costs
+bool  g_bEpRecordedOpen = false; // this run opened with a recorded wind-up, not the bot's own
 int   g_iPhaseTicks    = 0;      // ticks since the current driver took over
 
 // Wind-up: the bot builds its own speed from standing, jumps well inside the
@@ -138,6 +141,7 @@ int   g_iWindupAirMax  = 150;    // air ticks in the zone before it counts as fa
 int   g_iWindupHold    = 12;     // ticks a requested side is kept before it may change
 float g_fLearnedMix    = 0.0;    // main slot: share of runs opened by the learned wind-up
 bool  g_bEvalLearned   = true;   // evals open with the learned wind-up when there is one
+bool  g_bEvalWindupGreedy = false; // evals: the wind-up takes its likeliest action instead of sampling
 
 bool  g_bWindupLearn   = false;  // ...and its decisions are the ones being trained
 int   g_iWindupReqSide = 1;      // side the gesture asks for
@@ -427,10 +431,16 @@ stock void Ep_MouseAim(float aimYaw, float acc, float wmax)
 	Ep_MouseToward(aimRate + MOUSE_AIM * e, acc, wmax);
 }
 
-/** The key the hand presses for a commanded side: lifted while the mouse still turns the other way. */
+/**
+ * The key the hand presses for a commanded side. Once down for the command it
+ * stays down. At the start of a command it waits while the mouse still turns
+ * the other way, as a person does on a reversal, but never longer than MinCoast.
+ */
 stock int Ep_HandKey(int cmd)
 {
-	if (cmd != 0 && g_fMouseW * float(cmd) < -0.5)
+	if (cmd == 0 || g_iKeySide == cmd || g_iCmdHeld >= g_iMinCoast)
+		return cmd;
+	if (g_fMouseW * float(cmd) < -0.5)
 		return 0;
 	return cmd;
 }
@@ -456,31 +466,42 @@ stock void Ep_UpdatePitch(const float vel[3])
 		g_fEpPitch = 0.0;
 }
 
-/** The policy's own state, appended to the observation. */
-stock void Ep_FillExtra(int client, const float pos[3], const float vel[3], float obs[OBS_DIM])
+/** The own-state inputs from their parts; the demo capture builds them the same way. */
+stock void Ep_ExtraFrom(float w, float viewYaw, const float vel[3], int cmdSide, int cmdHeld,
+                        bool onGround, float edge, float air, float obs[OBS_DIM])
 {
 	float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
 	float off = 0.0;
 	if (speed > 1.0)
-		off = DegToRad(Ep_WrapAngle(g_fMouseYaw - RadToDeg(ArcTangent2(vel[1], vel[0]))));
+		off = DegToRad(Ep_WrapAngle(viewYaw - RadToDeg(ArcTangent2(vel[1], vel[0]))));
 
-	obs[OBS_EXTRA + 0] = g_fMouseW / 7.0;
+	obs[OBS_EXTRA + 0] = w / 7.0;
 	obs[OBS_EXTRA + 1] = Sine(off);
 	obs[OBS_EXTRA + 2] = Cosine(off);
-	obs[OBS_EXTRA + 3] = float(g_iCmdSide);
-	obs[OBS_EXTRA + 4] = float((g_iCmdHeld < 48) ? g_iCmdHeld : 48) / 48.0;
-	obs[OBS_EXTRA + 5] = (GetEntityFlags(client) & FL_ONGROUND) ? 1.0 : 0.0;
+	obs[OBS_EXTRA + 3] = float(cmdSide);
+	obs[OBS_EXTRA + 4] = float((cmdHeld < 48) ? cmdHeld : 48) / 48.0;
+	obs[OBS_EXTRA + 5] = onGround ? 1.0 : 0.0;
+	obs[OBS_EXTRA + 6] = edge;
+	obs[OBS_EXTRA + 7] = air;
+}
+
+/** The policy's own state, appended to the observation. */
+stock void Ep_FillExtra(int client, const float pos[3], const float vel[3], float obs[OBS_DIM])
+{
 	float edge = 0.0, air = 0.0;
 	if (!g_bEpClockOn && g_bZoneLoaded)
 	{
 		edge = Zone_EdgeDistance(pos) / 256.0;
 		if (edge >  1.0) edge =  1.0;
 		if (edge < -1.0) edge = -1.0;
-		air = float(g_iWindupAirTicks) / 50.0;
-		if (air > 2.0) air = 2.0;
+		if (g_bEpLearnedOpen || g_bEpGround)       // only while a wind-up is driving
+		{
+			air = float(g_iWindupAirTicks) / 50.0;
+			if (air > 2.0) air = 2.0;
+		}
 	}
-	obs[OBS_EXTRA + 6] = edge;
-	obs[OBS_EXTRA + 7] = air;
+	Ep_ExtraFrom(g_fMouseW, g_fMouseYaw, vel, g_iCmdSide, g_iCmdHeld,
+	             (GetEntityFlags(client) & FL_ONGROUND) != 0, edge, air, obs);
 }
 
 /** Everything the policy sees at a decision: the route, the traced surroundings and its own state. */
@@ -589,7 +610,9 @@ stock int Ep_WindupTick(int client, const float pos[3], const float vel[3],
 		Ep_BuildObservation(client, pos, vel, obs);
 		int mask = Ep_WindupMask();
 		float logp;
-		int act = Pol_Act(obs, logp, g_bEval && g_bEvalGreedy,
+		// The jump is one action among many at every decision, so the likeliest
+		// action is almost never the jump: the wind-up samples even in evals.
+		int act = Pol_Act(obs, logp, g_bEval && g_bEvalGreedy && g_bEvalWindupGreedy,
 		                  g_bWindupLearn ? NET_SELF : NET_PARTNER, mask);
 
 		if (act == POL_COAST)
@@ -668,7 +691,11 @@ stock int Ep_WindupTick(int client, const float pos[3], const float vel[3],
 stock int Ep_RunMask()
 {
 	int mask = POL_MASK_ALL;
-	if (g_iCmdSide != 0 && g_iCmdHeld < g_iMinPress)
+	// The key comes down up to MinCoast ticks after it is asked for, so the side
+	// also stays until the key itself has been down MinPress ticks.
+	bool keyShort = (g_iKeySide == g_iCmdSide && g_iKeyHeld < g_iMinPress) ||
+	                (g_iKeySide != g_iCmdSide && g_iCmdHeld < g_iMinCoast + g_iMinPress);
+	if (g_iCmdSide != 0 && (g_iCmdHeld < g_iMinPress || keyShort))
 	{
 		mask &= ~(1 << POL_COAST);
 		for (int a = 0; a < 2 * POL_TRIMS; a++)
@@ -875,9 +902,14 @@ stock void Ep_Begin()
 		g_iStatMidStart++;
 	UnfreezeBot();
 	g_bEpLearnedOpen = false;
+	g_bEpRecordedOpen = false;
 	g_fEpJumpInset = 0.0;
 
 	// Wind-up slot: from standing, always at the map start.
+	// An eval samples the wind-up from a seed fixed per run, so it can be repeated.
+	if (g_bEval)
+		Pol_Seed(0x5EED0000 + 7919 * (g_iEvalDone + 1));
+
 	if (g_iWindupTicks > 0)
 	{
 		g_iEpStartState = 0;
@@ -899,7 +931,11 @@ stock void Ep_Begin()
 	}
 
 	if (g_iEpStartState == 0 && Pre_Begin(g_iBot))
+	{
+		g_bEpRecordedOpen = true;
+		Ep_Reset();                      // no step of the last episode may carry over
 		return;
+	}
 
 	ApplyStateQuiet(g_iBot, g_iEpStartState);
 	Ep_Reset();
@@ -917,6 +953,8 @@ stock void Ep_ResetControl()
 	g_bMouseAimSet = false;
 	g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
 	g_iPhaseTicks = 0;
+	g_bEpSideKnown = (g_iCmdSide != 0);
+	g_bEpTrimKnown = false;
 }
 
 /** Establish the episode baseline from wherever the bot currently is. */
@@ -955,6 +993,8 @@ stock void Ep_Reset()
 	g_bEpFollow     = false;
 	g_iEpTakeoff    = TAKEOFF_NONE;
 	g_fEpStepReward = 0.0;
+	g_bWindupJumped = false;
+	g_iWindupAirTicks = 0;
 
 	// A fresh start takes the view it was placed with and no key held.
 	float ang[3];
@@ -1007,9 +1047,14 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		if (why != TAKEOFF_EXIT && Pre_Begin(g_iBot))
 		{
 			if (g_bEval)
-				PrintToServer("[CsAI]  learned wind-up failed (%d), opening with a recorded one", why);
+			{
+				static const char kFail[][] = { "", "", "walked to the zone edge", "left the ground without jumping",
+				                                "never jumped", "came down inside the zone", "stayed in the air too long", "" };
+				PrintToServer("[CsAI]  eval: learned wind-up failed (%s), opening with a recorded one", kFail[why]);
+			}
 			if (g_bRecording)
 				Rec_Start();
+			g_bEpRecordedOpen = true;
 			Ep_Reset();
 			return true;
 		}
@@ -1041,6 +1086,23 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		}
 		Ep_Reset();                      // handover: the baseline starts here
 		g_bEpClockOn = false;
+		// The run takes over the recording's hands as they are: its last turn
+		// speed and the key it held, as the learned opening does.
+		if (g_iPreCount >= 2)
+		{
+			int last = g_iPreCount - 1;
+			float w = Ep_WrapAngle(g_fPreAng[last][1] - g_fPreAng[last - 1][1]);
+			if (w >  g_fMouseMax) w =  g_fMouseMax;
+			if (w < -g_fMouseMax) w = -g_fMouseMax;
+			int side = Pre_KeySide(g_iPreButtons[last]);
+			int held = 0;
+			for (int t = last; t >= 0 && Pre_KeySide(g_iPreButtons[t]) == side; t--)
+				held++;
+			g_fMouseW = w;
+			g_iKeySide = side; g_iKeyHeld = held;
+			g_iCmdSide = side; g_iCmdHeld = held;
+			Ep_Handover();
+		}
 	}
 
 	float pos[3], vel[3];
@@ -1179,10 +1241,20 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			g_fEpWishAngle = Pol_WishAngle(g_iEpSide, g_iEpTrim);
 			if (!g_bEpFollow)
 			{
+				// After a reset the side and trim are placeholders until a key is
+				// really pressed, so the first press is not a switch.
 				if (g_iEpSide != prevSide)
-					g_fEpStepReward -= g_fSwitchCost;
-				else if (g_iEpTrim != prevTrim)
+				{
+					if (g_bEpSideKnown)
+						g_fEpStepReward -= g_fSwitchCost;
+				}
+				else if (g_iEpTrim != prevTrim && g_bEpTrimKnown)
 					g_fEpStepReward -= g_fTrimCost;
+			}
+			if (!g_bEpCoast)
+			{
+				g_bEpSideKnown = true;
+				g_bEpTrimKnown = true;
 			}
 		}
 		g_fEpWishAngle = Ep_WrapAngle(g_fEpWishAngle);

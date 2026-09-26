@@ -148,6 +148,13 @@ stock bool Pre_Begin(int client)
 	return true;
 }
 
+/** Which strafe key a recorded tick holds: +1 = A (left), -1 = D (right), 0 = none or both. */
+stock int Pre_KeySide(int b)
+{
+	bool l = (b & IN_MOVELEFT) != 0, r = (b & IN_MOVERIGHT) != 0;
+	return (l && !r) ? 1 : ((r && !l) ? -1 : 0);
+}
+
 stock bool Pre_Tick(int &buttons, float movement[3], float angles[3])
 {
 	if (!g_bPreActive || g_iPreIndex >= g_iPreCount)

@@ -20,7 +20,8 @@ param(
     [double]$MouseMax = 7.0,
     [int]$MinPress   = 12,
     [int]$MinCoast   = 6,
-    [int]$MaxCoast   = 16
+    [int]$MaxCoast   = 16,
+    [string]$Weights = ''       # a frozen weights file in the server's data/csai; blank = the live one
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +51,7 @@ $a = @(
     '+csai_bench_delay', '8'
 )
 if ($Slot) { $a += @('+csai_slot', $Slot) }
+if ($Weights) { $a += @('+csai_evalweights', $Weights) }
 if ($Partner) { $a += @('+csai_partner', $Partner) }
 
 $mode = if ($Greedy -ne 0) { 'greedy' } else { 'sampled' }

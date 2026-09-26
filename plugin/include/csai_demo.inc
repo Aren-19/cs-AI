@@ -321,7 +321,7 @@ stock bool Demo_Begin(int client)
 		PrintToServer("[CsAI] demo: could not open %s", path);
 		return false;
 	}
-	g_hDemoOut.WriteLine("# csai bc v1  obs=%d actions=%d frameskip=%d", OBS_DIM, POL_ACTIONS, g_iFrameSkip);
+	g_hDemoOut.WriteLine("# csai bc v2  obs=%d actions=%d frameskip=%d", OBS_DIM, POL_ACTIONS, g_iFrameSkip);
 
 	g_bDemoActive = true;
 	g_iDemoWrote  = 0;
@@ -409,6 +409,25 @@ stock bool Demo_Tick(int client, int &buttons, float movement[3], float angles[3
 			Track_BuildProbe(client, pos, vel, probe);
 			for (int pi = 0; pi < PROBE_DIM; pi++)
 				obs[7 + 3 * LOOKAHEAD + pi] = probe[pi];
+
+			// The own-state inputs as the run policy would see them here, from the
+			// recording up to the previous tick (this tick's key is the label).
+			// The capture covers the timed part only, where edge and air are 0.
+			float w = 0.0, view = g_fDemoAng[idx][1];
+			if (idx >= 1)
+				view = g_fDemoAng[idx - 1][1];
+			if (idx >= 2)
+			{
+				w = Ep_WrapAngle(g_fDemoAng[idx - 1][1] - g_fDemoAng[idx - 2][1]);
+				if (w >  g_fMouseMax) w =  g_fMouseMax;
+				if (w < -g_fMouseMax) w = -g_fMouseMax;
+			}
+			int key = (idx >= 1) ? Pre_KeySide(g_iDemoButtons[idx - 1]) : 0;
+			int held = 0;
+			for (int t = idx - 1; t >= 0 && Pre_KeySide(g_iDemoButtons[t]) == key; t--)
+				held++;
+			Ep_ExtraFrom(w, view, vel, key, held, (GetEntityFlags(client) & FL_ONGROUND) != 0,
+			             0.0, 0.0, obs);
 
 #if WISH_DIM > 0
 			float wr = DegToRad(Pol_WishAngle(g_iDemoSide, g_iDemoTrim));

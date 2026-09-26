@@ -234,6 +234,11 @@ void ArmBenchmark()
     g_fStartSpeedCap  = GetCommandLineParamFloat("+csai_startcap", g_fStartSpeedCap);
     g_fLineJitter     = GetCommandLineParamFloat("+csai_linejitter", g_fLineJitter);
     g_iWindupTicks    = GetCommandLineParamInt("+csai_windup", g_iWindupTicks);
+    // -Windup N is also the ground-tick limit, as the tools describe it.
+    if (g_iWindupTicks > 0 && GetCommandLineParamInt("+csai_windupmax", 0) <= 0)
+        g_iWindupMax = g_iWindupTicks;
+    GetCommandLineParam("+csai_evalweights", g_sEvalWeights, sizeof(g_sEvalWeights), "");
+    g_bEvalWindupGreedy = (GetCommandLineParamInt("+csai_evalwindupgreedy", 0) != 0);
     g_iWindupHold     = GetCommandLineParamInt("+csai_winduphold", g_iWindupHold);
     g_iWindupAirMax   = GetCommandLineParamInt("+csai_windupair", g_iWindupAirMax);
     g_fMouseAcc       = GetCommandLineParamFloat("+csai_mouseacc", g_fMouseAcc);

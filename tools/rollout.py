@@ -184,9 +184,10 @@ class Episode(object):
     @property
     def terminal(self):
         """True when the episode ended in a real terminal state, not a cutoff."""
-        # A wind-up ends at its handover tick with the reward fully paid, so
-        # there is nothing beyond it to bootstrap from.
-        return self.outcome in (EP_FELL, EP_FINISHED, EP_WINDUP)
+        # A wind-up ends at its handover tick with the reward fully paid, and a
+        # stuck run is a dead end the server scores as a failure, so there is
+        # nothing beyond either to bootstrap from. Only a time limit bootstraps.
+        return self.outcome in (EP_FELL, EP_FINISHED, EP_STUCK, EP_WINDUP)
 
 def read_batch(path):
     with open(path, "rb") as fh:

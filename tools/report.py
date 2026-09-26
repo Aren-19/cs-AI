@@ -122,14 +122,20 @@ def eval_runs(limit_bytes=4000000):
             blob = fh.read().decode("utf-8", "replace")
     except OSError:
         return out
-    cur = 0
+    # Maps take turns in one eval log; each block opens with "# <date> <time> <map>".
+    cur, blk = 0, None
     for line in blob.splitlines():
+        if line.startswith("# "):
+            hm = re.match(r"^# \S+ \S+ (\S+)", line)
+            blk = hm.group(1) if hm else None
+            cur = 0
+            continue
         h = re.search(r"eval: \d+ \w+ runs from state 0, policy gen (\d+)", line)
         if h:
             cur = int(h.group(1))
             continue
-        m = re.search(r"eval run \d+/\d+: (\w+) at ([\d.]+)% in ([\d.]+)s", line)
-        if m:
+        m = re.search(r"eval run \d+/\d+: (.+?) at ([\d.]+)% in ([\d.]+)s", line)
+        if m and blk in (None, MAP):
             out.append((cur, m.group(1).upper() == "FINISHED",
                         float(m.group(2)), float(m.group(3))))
     return out

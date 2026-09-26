@@ -5,6 +5,8 @@
 
 bool g_bTrainSync      = true;     // wait for a new policy between batches
 bool g_bTrainWaiting   = false;
+char g_sEvalWeights[PLATFORM_MAX_PATH] = "";   // evals: a frozen weights file in data/csai, instead of the live one
+bool g_bTrainResume    = false;   // new weights are in: start the next batch on the bot's next tick
 int  g_iTrainBatches   = 0;        // batches remaining; <0 = unlimited
 int  g_iActorId        = 0;
 
@@ -150,6 +152,7 @@ stock void Train_Begin(int batches, bool sync, bool quitAfter)
 
 stock void Train_Stop()
 {
+	g_bTrainResume = false;
 	g_bEval = false;
 	g_iEvalLeft = 0;
 	g_bTraining = false;
@@ -215,6 +218,17 @@ stock bool Train_Tick(int client, int &buttons, float movement[3], float angles[
 {
 	if (g_bTrainWaiting)
 	{
+		// Starting here rather than from the timer lets this tick's physics
+		// settle the bot where the episode put it before its first decision.
+		if (g_bTrainResume)
+		{
+			g_bTrainResume = false;
+			g_bTrainWaiting = false;
+			g_fTrainStart = GetEngineTime();
+			Ep_OpenBatch();
+			Ep_Begin();
+			GetClientEyeAngles(client, angles);
+		}
 		// idle: hold still rather than flailing while the learner works
 		movement[0] = 0.0;
 		movement[1] = 0.0;
@@ -271,19 +285,20 @@ stock void Train_Poll()
 		return;
 	}
 
-	if (Train_TryLoadNewWeights())
+	if (!g_bTrainResume && Train_TryLoadNewWeights())
 	{
 		Train_LoadPartner();
-		g_bTrainWaiting = false;
-		g_fTrainStart = GetEngineTime();
-		Ep_OpenBatch();
-		Ep_Begin();
+		g_bTrainResume = true;           // Train_Tick starts the batch
 	}
+	// A dead bot gets no ticks, so it would never start.
+	if (g_bTrainResume && g_iBot != -1 && IsClientInGame(g_iBot) && !IsPlayerAlive(g_iBot))
+		CS_RespawnPlayer(g_iBot);
 }
 
 int   g_iEvalLeft    = 0;
 int   g_iEvalDone    = 0;
 int   g_iEvalFinish  = 0;
+int   g_iEvalRecorded = 0;      // runs that opened with a recorded wind-up
 float g_fEvalBestFrac = 0.0;
 float g_fEvalBestTime = 0.0;
 int   g_iEvalSavedStates = 0;
@@ -297,7 +312,10 @@ stock void Eval_Begin(int runs)
 	}
 
 	char wpath[PLATFORM_MAX_PATH];
-	Train_WeightsPath(wpath, sizeof(wpath));
+	if (g_sEvalWeights[0] != '\0')
+		BuildPath(Path_SM, wpath, sizeof(wpath), "data/csai/%s", g_sEvalWeights);
+	else
+		Train_WeightsPath(wpath, sizeof(wpath));
 	if (!Pol_Load(wpath) && !g_bPolicyLoaded)
 	{
 		PrintToServer("[CsAI] eval: no usable weights at %s - refusing to run", wpath);
@@ -314,6 +332,7 @@ stock void Eval_Begin(int runs)
 	g_iEvalLeft    = runs;
 	g_iEvalDone    = 0;
 	g_iEvalFinish  = 0;
+	g_iEvalRecorded = 0;
 	g_fEvalBestFrac = 0.0;
 	g_fEvalBestTime = 0.0;
 
@@ -375,8 +394,11 @@ stock void Eval_EpisodeDone()
 		case EP_TIMEOUT:  what = "timed out";
 		default:          what = "stuck";
 	}
-	PrintToServer("[CsAI]  eval run %d/%d: %s at %.1f%% in %.2fs",
-	              g_iEvalDone, g_iEvalDone + g_iEvalLeft - 1, what, frac * 100.0, secs);
+	if (g_bEpRecordedOpen)
+		g_iEvalRecorded++;
+	PrintToServer("[CsAI]  eval run %d/%d: %s at %.1f%% in %.2fs%s",
+	              g_iEvalDone, g_iEvalDone + g_iEvalLeft - 1, what, frac * 100.0, secs,
+	              g_bEpRecordedOpen ? " (recorded opening)" : "");
 
 	g_iEvalLeft--;
 	if (g_iEvalLeft <= 0)
@@ -387,6 +409,8 @@ stock void Eval_EpisodeDone()
 		else
 			PrintToServer("[CsAI] eval complete: 0/%d finished, best %.1f%% of track",
 			              g_iEvalDone, g_fEvalBestFrac * 100.0);
+		if (g_iEvalRecorded > 0)
+			PrintToServer("[CsAI] eval: %d/%d runs opened with a recorded wind-up", g_iEvalRecorded, g_iEvalDone);
 		g_bEval = false;
 		g_bTraining = false;
 		g_iTrainStates = g_iEvalSavedStates;

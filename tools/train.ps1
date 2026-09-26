@@ -18,6 +18,7 @@ param(
     [string]$Partner = '',      # slot whose policy runs alongside
     [double]$LearnedMix = 0,    # main: share of runs opened by the learned wind-up
     [int]$Port       = 26900,
+    [int]$Actor      = 98,      # 90 and up: a running learner never takes these batches
     [int]$TimeoutSec = 900,
     [switch]$Wait               # block until the server exits
 )
@@ -30,6 +31,7 @@ $a = @(
     '+csai_train_batches', $Batches,
     '+csai_train_sync', $Sync,
     '+csai_batch', $BatchSize,
+    '+csai_actor', $Actor,
     '+csai_frameskip', $FrameSkip,
     '+csai_states', $States,
     '+csai_prestrafe', $Prestrafe,

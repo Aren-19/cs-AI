@@ -33,6 +33,12 @@ def find_next_batch(outdir, processed):
         if not name.endswith(".done"):
             continue
         stem = name[:-5]
+        # Actors 90 and up are one-off runs (train.ps1, unstick.py, evals), not training.
+        try:
+            if int(stem.split("_")[0][1:]) >= 90:
+                continue
+        except ValueError:
+            pass
         binp = os.path.join(outdir, stem + ".bin")
         try:
             key = (stem, os.path.getmtime(os.path.join(outdir, name)))
@@ -132,6 +138,10 @@ def main():
     val_opt = Adam(value.shapes(), lr=args.vlr)
     gen = 0
     ent_gen0 = None            # generation the entropy anneal counts from
+    # The anneal carries on across a resume only while its settings stay the same.
+    ent_cfg = np.array([args.ent,
+                        args.ent_final if args.ent_final is not None else -1.0,
+                        float(args.ent_anneal) if args.ent_final is not None else 0.0])
 
     if args.resume and os.path.exists(args.ckpt):
         # Read and closed at once: an open handle stops Windows replacing the file.
@@ -169,7 +179,11 @@ def main():
             p[...] = z["v%d" % i]
         gen = int(z["gen"])
         if "ent_gen0" in z:
-            ent_gen0 = int(z["ent_gen0"])
+            if "ent_cfg" not in z or np.allclose(z["ent_cfg"], ent_cfg):
+                ent_gen0 = int(z["ent_gen0"])
+            else:
+                print("entropy settings changed (%s -> %s): the anneal starts again here"
+                      % (z["ent_cfg"].tolist(), ent_cfg.tolist()))
         if "ret_mean" in z:
             value.ret_mean = float(z["ret_mean"])
             value.ret_var = float(z["ret_var"])
@@ -387,7 +401,7 @@ def main():
         logf.flush()
 
         tmp = args.ckpt + ".tmp"
-        np.savez(tmp, gen=gen, ent_gen0=ent_gen0,
+        np.savez(tmp, gen=gen, ent_gen0=ent_gen0, ent_cfg=ent_cfg,
                  ret_mean=value.ret_mean, ret_var=value.ret_var, ret_count=value.ret_count,
                  **{"p%d" % i: p for i, p in enumerate(policy.params())},
                  **{"v%d" % i: p for i, p in enumerate(value.params())})

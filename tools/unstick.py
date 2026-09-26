@@ -23,7 +23,7 @@ CREATE_NO_WINDOW = 0x08000000
 
 N_TRIMS = (N_ACTIONS - 1) // 2          # the last action is coast
 PROBE_PORT = "26800"
-PROBE_ACTOR = "9"
+PROBE_ACTOR = "97"           # 90 and up: a running learner never takes these batches
 
 # --------------------------------------------------------------- running ----
 
@@ -69,7 +69,7 @@ def eval_runs(map_name, frameskip, runs=5, devcost=0.5):
                      "+csai_evalgreedy", "0", "+csai_frameskip", str(frameskip),
                      "+csai_devcost", str(devcost), "+csai_prestrafe", "1",
                      "+csai_budget", "6000", "+csai_deviation", "600"])
-    return [float(x) for x in re.findall(r"eval run \d+/\d+: \w+ at ([\d.]+)%", log)]
+    return [float(x) for x in re.findall(r"eval run \d+/\d+: .+? at ([\d.]+)%", log)]
 
 # ------------------------------------------------------------ checkpoints ----
 
@@ -91,7 +91,19 @@ def checkpoints(map_name):
     return out, tr
 
 def load_dump(path, tr):
-    rows = [[float(x) for x in l.split()] for l in open(path) if len(l.split()) > 7]
+    width = 6 + OBS_DIM
+    rows, bad = [], 0
+    with open(path) as fh:
+        for l in fh:
+            p = l.split()
+            if not p or p[0].startswith("#"):    # "# line ..." headers
+                continue
+            if len(p) != width:
+                bad += 1
+                continue
+            rows.append([float(x) for x in p])
+    if bad and not rows:
+        raise SystemExit("stale dump %s: rows are not %d wide (6 state + %d inputs)" % (path, width, OBS_DIM))
     if not rows:
         return np.zeros((0, OBS_DIM)), np.zeros(0)
     a = np.array(rows)
@@ -140,13 +152,10 @@ def teach(pol, Xteach, action, Xanchor, epochs=150, lr=1e-4, anchor_weight=3.0):
     return P[:, action].mean(), kept
 
 def save(ckpt, weights, pol, z):
-    out = {"gen": int(z["gen"])}
-    for k in ("ret_mean", "ret_var", "ret_count"):
-        if k in z:
-            out[k] = float(z[k])
+    # Everything the checkpoint had (entropy schedule, return stats, value net),
+    # with only the policy replaced.
+    out = {k: z[k] for k in z.files}
     out.update({"p%d" % i: p for i, p in enumerate(pol.params())})
-    nval = len(Value(np.random.default_rng(0)).params())
-    out.update({"v%d" % i: z["v%d" % i] for i in range(nval)})
     np.savez(ckpt, **out)
     write_weights(weights, pol, int(z["gen"]))
 

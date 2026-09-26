@@ -30,6 +30,14 @@ def load(path):
             if not line:
                 continue
             if line.startswith("#"):
+                if "obs=" in line:
+                    try:
+                        width = int(line.split("obs=")[1].split()[0])
+                    except (ValueError, IndexError):
+                        width = OBS_DIM
+                    if width != OBS_DIM:
+                        raise SystemExit("%s was captured with %d inputs; this build uses %d. "
+                                         "Capture it again with +csai_democapture." % (path, width, OBS_DIM))
                 if "frameskip=" in line:
                     try:
                         frameskip = int(line.split("frameskip=")[1].split()[0])

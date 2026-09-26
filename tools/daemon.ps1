@@ -213,14 +213,25 @@ function Invoke-Eval {
     $script:EvalCount++
     $script:EvalMap = $m
     Write-Log "  evaluating the policy on $m (writes a replay)"
-    # The checkpoint as it stands now, in case this eval turns out to be the best.
+    # The checkpoint as it stands now, in case this eval turns out to be the best,
+    # and a weights file frozen from it, so the eval measures exactly that one.
     try { Copy-Item $Ckpt $EvalCkpt -Force -ErrorAction Stop } catch { Remove-Item $EvalCkpt -ErrorAction SilentlyContinue }
+    $frozen = "weights_eval$Sfx.txt"
+    $frozenPath = Join-Path $Data $frozen
+    Remove-Item $frozenPath -ErrorAction SilentlyContinue
+    if (Test-Path $EvalCkpt) {
+        $fp = Start-Hidden 'python.exe' @((Join-Path $Root 'tools\freeze.py'), $EvalCkpt, $frozenPath) (Join-Path $Root 'tools')
+        if ($fp) { [void]$fp.WaitForExit(60000) }
+    }
+    $script:EvalLogLen = if (Test-Path $EvalLog) { (Get-Item $EvalLog).Length } else { 0 }
     $ea = @('-Runs', '8', '-Map', $m, '-Greedy', '1', '-Port', $EvalPort,
             '-FrameSkip', $FrameSkip, '-DevCost', $DevCost, '-Windup', $Windup,
             '-Partner', $Partner, '-MouseAcc', $MouseAcc, '-MouseMax', $MouseMax,
             '-MinPress', $MinPress, '-MinCoast', $MinCoast, '-MaxCoast', $MaxCoast,
             '-Timescale', '80', '-TimeoutSec', '600')
     if ($Slot) { $ea += @('-Slot', $Slot) }
+    if (Test-Path $frozenPath) { $ea += @('-Weights', $frozen) }
+    else { Remove-Item $EvalCkpt -ErrorAction SilentlyContinue }   # nothing to keep: the eval runs the live weights
     return (Start-HiddenPowerShell (Join-Path $Root 'tools\eval.ps1') $ea $Root)
 }
 
@@ -289,6 +300,7 @@ $stallRestarts = 0
 $badEvals = 0
 $rolledBack = $false
 $EvalCount = 0
+$EvalLogLen = 0
 $EvalMap = $Map
 $lastEvalGen = $lastGen
 $lastReport = Get-Date
@@ -296,20 +308,28 @@ $appliedLevel = $level
 
 # The last evaluation in the eval log: runs, finishes and the median finish time.
 function Read-EvalResult {
-    if (-not (Test-Path $EvalLog)) { return $null }
+    # Only a block this eval appended, for the map it evaluated.
+    if (-not (Test-Path $EvalLog) -or (Get-Item $EvalLog).Length -le $script:EvalLogLen) { return $null }
     $block = @()
+    $head = ''
     foreach ($l in (Get-Content $EvalLog -Tail 60)) {
-        if ($l -like '# *') { $block = @() } else { $block += $l }
+        if ($l -like '# *') { $block = @(); $head = $l } else { $block += $l }
     }
+    if ($head -notmatch '^# \S+ \S+ (\S+)$' -or $Matches[1] -ne $script:EvalMap) { return $null }
     $gen = 0
     $times = @()
     $runs = 0
     $fastest = 0.0
     $record = 0.0
     foreach ($l in $block) {
-        if ($l -match 'best time ([\d.]+)s \(human ([\d.]+)s\)') { $fastest = [double]$Matches[1]; $record = [double]$Matches[2] }
+        if ($l -match 'best time [\d.]+s \(human ([\d.]+)s\)') { $record = [double]$Matches[1] }
+        # Only a run that opened with the bot's own wind-up can beat a record.
+        if ($l -match 'eval run \d+/\d+: FINISHED at [\d.]+% in ([\d.]+)s' -and $l -notmatch 'recorded opening') {
+            $t = [double]$Matches[1]
+            if ($fastest -le 0 -or $t -lt $fastest) { $fastest = $t }
+        }
         if ($l -match 'policy gen (\d+)') { $gen = [int]$Matches[1] }
-        if ($l -match 'eval run \d+/\d+: (\S+) at [\d.]+% in ([\d.]+)s') {
+        if ($l -match 'eval run \d+/\d+: (.+?) at [\d.]+% in ([\d.]+)s') {
             $runs++
             if ($Matches[1] -eq 'FINISHED') { $times += [double]$Matches[2] }
         }

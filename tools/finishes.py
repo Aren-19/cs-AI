@@ -13,6 +13,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 from rollout import read_batch, Track, EP_FINISHED, OUTCOME_NAMES
+from learn import read_done
 
 from game import CSTRIKE
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
@@ -50,9 +51,16 @@ def main():
         return 1
     ref = reference_time(os.path.join(DATA, "%s_states.txt" % args.map))
 
-    files = [f for f in sorted(glob.glob(os.path.join(OUT, "*batch_*.bin")),
-                               key=os.path.getmtime)
-             if not os.path.basename(f).startswith("a99_")]
+    # Several maps share one out directory; each batch's .done names its map.
+    # A batch without one is still being written.
+    files = []
+    for f in sorted(glob.glob(os.path.join(OUT, "*batch_*.bin")), key=os.path.getmtime):
+        if os.path.basename(f).startswith("a99_"):
+            continue
+        donep = os.path.splitext(f)[0] + ".done"
+        if not os.path.exists(donep) or read_done(donep).get("map", "") != args.map:
+            continue
+        files.append(f)
     n = 0
     times = []
     deaths = []
