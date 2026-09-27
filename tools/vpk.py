@@ -2,6 +2,7 @@
 
 import os
 import struct
+import threading
 
 VPK_SIGNATURE = 0x55AA1234
 ARCHIVE_IN_DIR = 0x7FFF
@@ -26,6 +27,7 @@ class VPK(object):
         self.base = dir_path[:-8] if dir_path.lower().endswith("_dir.vpk") else dir_path[:-4]
         self.entries = {}
         self._archives = {}
+        self._lock = threading.Lock()   # the web viewer reads from several threads at once
         self._parse()
 
     def _parse(self):
@@ -100,18 +102,22 @@ class VPK(object):
             return None
         if e.length == 0:
             return e.preload
-        fh = self._archive(e.archive_index)
         base = self.data_offset if e.archive_index == ARCHIVE_IN_DIR else 0
-        fh.seek(base + e.offset)
-        return e.preload + fh.read(e.length)
+        # One handle per archive is shared, so its seek and read must not interleave.
+        with self._lock:
+            fh = self._archive(e.archive_index)
+            fh.seek(base + e.offset)
+            data = fh.read(e.length)
+        return e.preload + data
 
     def close(self):
-        for fh in self._archives.values():
-            try:
-                fh.close()
-            except OSError:
-                pass
-        self._archives.clear()
+        with self._lock:
+            for fh in self._archives.values():
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+            self._archives.clear()
 
 class SourceFS(object):
     """Resolves a Source path the way CS:S does, in the order of its gameinfo.txt:

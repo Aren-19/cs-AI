@@ -42,17 +42,29 @@ def _libraries(steam):
     for m in re.finditer(r'"path"\s+"([^"]+)"', text):
         yield os.path.normpath(m.group(1).replace("\\\\", "\\"))
 
+def _named():
+    """The folder in data/game.txt, whatever editor or shell wrote it."""
+    try:
+        with open(os.path.join(ROOT, "data", "game.txt"), "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):          # PowerShell 5.1 ">" writes UTF-16
+        text = raw.decode("utf-16", errors="replace")
+    else:
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("mbcs" if os.name == "nt" else "latin-1", errors="replace")
+    return text.strip().strip('"').strip()
+
 def find_game():
     env = os.environ.get("CSAI_GAME")
     if _ok(env):
         return env
-    try:
-        with open(os.path.join(ROOT, "data", "game.txt"), encoding="utf-8-sig") as fh:
-            named = fh.read().strip()
-        if _ok(named):
-            return named
-    except OSError:
-        pass
+    named = _named()
+    if _ok(named):
+        return named
     for steam in _steam_folders():
         for lib in _libraries(steam):
             p = os.path.join(lib, "steamapps", "common", "Counter-Strike Source")

@@ -56,8 +56,6 @@ $Data      = Join-Path $GameRoot 'cstrike\addons\sourcemod\data\csai'
 $OutDir    = Join-Path $Data "out$Sfx"
 $Weights   = Join-Path $Data "weights$Sfx.txt"
 $EvalCkpt  = Join-Path $DataDir "eval_ckpt$Sfx.npz"
-$BestCkpt  = Join-Path $DataDir "ckpt_best$Sfx.npz"
-$BestFile  = Join-Path $DataDir "best$Sfx.txt"
 $EvalLog   = Join-Path $LogDir "eval_$Name.log"
 
 # Ports: 27015 + 10 per actor for main; other slots get their own block.
@@ -78,6 +76,13 @@ if (-not $Map) {
 # evaluations take turns. The first map is the one reports are about.
 $Maps = @($Map -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $Map = $Maps[0]
+# Best files are named after their map. Older ones kept the first map's under the
+# plain names; those belong to the first map of the list they were written with.
+foreach ($pair in @(@("best$Sfx.txt", "best$Sfx.$Map.txt"), @("ckpt_best$Sfx.npz", "ckpt_best$Sfx.$Map.npz"))) {
+    $old = Join-Path $DataDir $pair[0]
+    $new = Join-Path $DataDir $pair[1]
+    if ((Test-Path $old) -and -not (Test-Path $new)) { Move-Item $old $new }
+}
 if (-not $Slot) { Set-Content -Path $MapFile -Value $Map -Encoding ascii }
 
 $Levels = @{
@@ -175,7 +180,7 @@ function Start-Actor([string]$level, [int]$id) {
     $a = @(
         '+csai_actor', $id,
         '+csai_seed', (([int]((Get-Date).Ticks % 100000)) * 32 + $id * 7919 + 1),
-        '+map', $Maps[$id % $Maps.Count],
+        '+map', $Maps[($id + $script:MapShift) % $Maps.Count],
         '+csai_train_batches', '1000000', '+csai_train_sync', '1',
         '+csai_batch', $cfg.Batch, '+csai_frameskip', $FrameSkip,
         '+csai_states', '1', '+csai_budget', '6000', '+csai_deviation', '600',
@@ -297,6 +302,12 @@ $lastGen = Get-Gen
 $lastGenAt = Get-Date
 $stallWarned = $false
 $stallRestarts = 0
+$stallRestartGen = 0
+$MapShift = 0
+$lastShiftGen = $lastGen
+if ($Maps.Count -gt $Actors) {
+    Write-Log "  $($Maps.Count) maps on $Actors server(s): the maps take turns every $([math]::Max($EvalEvery, 40)) generations"
+}
 $badEvals = 0
 $rolledBack = $false
 $EvalCount = 0
@@ -360,8 +371,7 @@ function Test-Humanlike([string]$m, [int]$gen) {
 
 # The first map keeps the plain names; the others add the map to them.
 function Best-Paths([string]$m) {
-    $tag = if ($m -eq $Map) { $Sfx } else { "$Sfx.$m" }
-    return @((Join-Path $DataDir "best$tag.txt"), (Join-Path $DataDir "ckpt_best$tag.npz"))
+    return @((Join-Path $DataDir "best$Sfx.$m.txt"), (Join-Path $DataDir "ckpt_best$Sfx.$m.npz"))
 }
 
 function Read-Best([string]$file) {
@@ -400,11 +410,11 @@ function Update-Best {
     if ($m -ne $Map) { return }             # rolling back is judged on the first map only
     $worse = $b -and (($r.Finished -le $b.Finished - 2) -or ($r.Finished -gt 0 -and $b.Finished -gt 0 -and $r.Median -gt $b.Median + 0.25))
     $script:badEvals = if ($worse) { $script:badEvals + 1 } else { 0 }
-    if ($Guard -gt 0 -and $script:badEvals -ge $Guard -and -not $script:rolledBack -and (Test-Path $BestCkpt)) {
+    if ($Guard -gt 0 -and $script:badEvals -ge $Guard -and -not $script:rolledBack -and (Test-Path $bestCkpt)) {
         Write-Log "  $($script:badEvals) evals in a row clearly behind the best (gen $($b.Gen)) - rolling back to it"
         foreach ($p in (Get-MyLearners)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 2
-        $rp = Start-Hidden 'python.exe' @((Join-Path $Root 'tools\restore.py'), $BestCkpt, $Ckpt) $Root
+        $rp = Start-Hidden 'python.exe' @((Join-Path $Root 'tools\restore.py'), $bestCkpt, $Ckpt) $Root
         if ($rp) { [void]$rp.WaitForExit(60000) }
         Start-Learner
         $script:rolledBack = $true
@@ -485,6 +495,7 @@ while ($true) {
         $lastGen = $gen
         $lastGenAt = Get-Date
         $stallWarned = $false
+        if ($stallRestarts -gt 0 -and $gen -ge $stallRestartGen + 10) { $stallRestarts = 0 }
     } elseif (((Get-Date) - $lastGenAt).TotalSeconds -ge $StallSeconds) {
         $stalledFor = [int]((Get-Date) - $lastGenAt).TotalSeconds
         if (-not $stallWarned) {
@@ -501,6 +512,7 @@ while ($true) {
         }
         elseif ($stalledFor -ge (3 * $StallSeconds) -and $stallRestarts -lt 3) {
             $stallRestarts++
+            $stallRestartGen = $gen
             Write-Log "  still stalled after ${stalledFor}s - restarting everything (attempt $stallRestarts of 3)"
             Stop-All
             Start-Sleep -Seconds 5
@@ -525,6 +537,15 @@ while ($true) {
             $evalStartedAt = Get-Date
         }
         $lastEvalGen = $gen
+    }
+
+    # With fewer servers than maps, the servers move on to the next maps in turn.
+    if ($Maps.Count -gt $Actors -and ($gen - $lastShiftGen) -ge [math]::Max($EvalEvery, 40)) {
+        $MapShift = ($MapShift + $Actors) % $Maps.Count
+        $now = @(0..($Actors - 1) | ForEach-Object { $Maps[($_ + $MapShift) % $Maps.Count] })
+        Write-Log "  maps take turns: servers now on $($now -join ', ')"
+        for ($i = 0; $i -lt $Actors; $i++) { Restart-Actor $i; Start-Sleep -Seconds 2 }
+        $lastShiftGen = $gen
     }
 }
 

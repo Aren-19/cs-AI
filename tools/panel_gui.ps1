@@ -98,8 +98,8 @@ function Get-SlotMaps([string]$slot) {
 }
 
 function Get-Best([string]$slot, [string]$map, [bool]$first) {
-    $tag = if ($first) { Sfx $slot } else { "$(Sfx $slot).$map" }
-    $f = Join-Path $Data "best$tag.txt"
+    $f = Join-Path $Data "best$(Sfx $slot).$map.txt"
+    if ($first -and -not (Test-Path $f)) { $f = Join-Path $Data "best$(Sfx $slot).txt" }   # written before best files were named
     if (-not (Test-Path $f)) { return '' }
     $v = (Get-Content $f -Raw).Trim() -split '\s+'
     if ($v.Count -lt 4 -or [int]$v[1] -eq 0) { return '' }
@@ -108,7 +108,7 @@ function Get-Best([string]$slot, [string]$map, [bool]$first) {
 
 # One summary per map: finish rate and median from the start, or the mean score.
 function Get-Progress([string]$slot) {
-    $maps = Get-SlotMaps $slot
+    $maps = @(Get-SlotMaps $slot)
     $log = Join-Path $Data "train_log$(Sfx $slot).csv"
     $out = ''
     $stats = @{}

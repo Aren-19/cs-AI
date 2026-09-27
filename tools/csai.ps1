@@ -88,7 +88,8 @@ function Get-Record([string]$m) {
 }
 
 function Get-BotBest([string]$m, [bool]$first) {
-    $f = if ($first) { Join-Path $Data 'best.txt' } else { Join-Path $Data "best.$m.txt" }
+    $f = Join-Path $Data "best.$m.txt"
+    if ($first -and -not (Test-Path $f)) { $f = Join-Path $Data 'best.txt' }   # written before best files were named
     if (-not (Test-Path $f)) { return $null }
     $v = (Get-Content $f -Raw).Trim() -split '\s+'
     if ($v.Count -lt 4) { return $null }
@@ -96,11 +97,11 @@ function Get-BotBest([string]$m, [bool]$first) {
 }
 
 function Show-Status {
-    $running = (Get-Supervisors).Count -gt 0
+    $running = @(Get-Supervisors).Count -gt 0
     Write-Host ("training is {0}" -f $(if ($running) { 'running' } else { 'stopped' }))
     Write-Host ''
     Write-Host ('{0,-22} {1,10} {2,12} {3,10}' -f 'map', 'record', 'bot best', 'finishes')
-    $maps = Get-Maps 'main'
+    $maps = @(Get-Maps 'main')
     for ($i = 0; $i -lt $maps.Count; $i++) {
         $m = $maps[$i]
         $rec = Get-Record $m
@@ -130,8 +131,13 @@ function Show-Status {
 switch ($Command.ToLower()) {
     'panel' {
         $exe = Join-Path $Root 'CsAI.exe'
-        if (Test-Path $exe) { Start-Process $exe }
-        else { [void](Start-HiddenPowerShell (Join-Path $Root 'tools\panel_gui.ps1') @() $Root) }
+        # The panel is the one window that must be seen: never the hidden desktop.
+        if (Test-Path $exe) { Start-Process $exe -WorkingDirectory $Root }
+        else {
+            Start-Process powershell.exe -WorkingDirectory $Root -WindowStyle Hidden -ArgumentList @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                '-File', ('"' + (Join-Path $Root 'tools\panel_gui.ps1') + '"'))
+        }
     }
     'teach' {
         if (-not $MapName) { Write-Host 'usage: CsAI.bat teach <map>'; exit 1 }
@@ -145,7 +151,7 @@ switch ($Command.ToLower()) {
             Set-Maps 'main' ($maps + $MapName)
             Write-Host "added $MapName to training ($((@($maps) + $MapName) -join ', '))"
         }
-        if ((Get-Supervisors).Count -gt 0) {
+        if (@(Get-Supervisors).Count -gt 0) {
             Write-Host 'restarting training so the servers pick it up'
             Stop-Training
             Start-Training
@@ -155,14 +161,23 @@ switch ($Command.ToLower()) {
     }
     'forget' {
         if (-not $MapName) { Write-Host 'usage: CsAI.bat forget <map>'; exit 1 }
-        $maps = @(Get-Maps 'main' | Where-Object { $_ -ne $MapName })
+        $all = @(Get-Maps 'main')
+        if ($all -notcontains $MapName) { Write-Host "$MapName is not in training ($($all -join ', '))"; exit 1 }
+        $maps = @($all | Where-Object { $_ -ne $MapName })
         if (-not $maps) { Write-Host 'that is the only map in training - teach another one first'; exit 1 }
+        # Older best files kept the first map's under the plain names; name them first.
+        foreach ($sfx in @('', '_windup')) {
+            foreach ($pair in @(@("best$sfx.txt", "best$sfx.$($all[0]).txt"), @("ckpt_best$sfx.npz", "ckpt_best$sfx.$($all[0]).npz"))) {
+                $old = Join-Path $Data $pair[0]; $new = Join-Path $Data $pair[1]
+                if ((Test-Path $old) -and -not (Test-Path $new)) { Move-Item $old $new }
+            }
+        }
         Set-Maps 'main' $maps
         Write-Host "training on: $($maps -join ', ')"
-        if ((Get-Supervisors).Count -gt 0) { Stop-Training; Start-Training }
+        if (@(Get-Supervisors).Count -gt 0) { Stop-Training; Start-Training }
     }
     'status' { Show-Status }
-    'start'  { if ((Get-Supervisors).Count -gt 0) { Write-Host 'already running' } else { Start-Training } }
+    'start'  { if (@(Get-Supervisors).Count -gt 0) { Write-Host 'already running' } else { Start-Training } }
     'stop'   { Stop-Training }
     default {
         Write-Host 'CsAI.bat                  open the panel'

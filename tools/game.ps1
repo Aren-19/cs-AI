@@ -6,7 +6,7 @@ function Find-Game {
     if (& $ok $env:CSAI_GAME) { return $env:CSAI_GAME }
     $named = Join-Path (Split-Path -Parent $PSScriptRoot) 'data\game.txt'
     if (Test-Path $named) {
-        $p = (Get-Content $named -Raw).Trim([char]0xFEFF + " `t`r`n")
+        $p = ([string](Get-Content $named -Raw)).Trim([char]0xFEFF + " `t`r`n`"")
         if (& $ok $p) { return $p }
     }
     $steams = @()
