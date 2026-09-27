@@ -106,10 +106,11 @@ no tick-perfect strafes:
 
 - The mouse has momentum. It speeds up and settles over several ticks instead of
   snapping, and never turns faster than a person does (7 degrees a tick).
-- A strafe key stays down at least 12 ticks, and after letting go the next press
-  waits 6.
-- On a direction change the key comes up while the mouse is still turning the
-  old way, as it does for a person, instead of flipping in one tick.
+- A strafe key stays down at least 12 ticks. After letting go, the next press
+  waits at least 6 ticks and at most 16, so it never surfs hands-off for long.
+- On a direction change the new key waits a moment while the mouse is still
+  turning the old way, as it does for a person, instead of flipping in one tick.
+  Once down, it stays down.
 - The jump has to be well inside the start zone; stepping off the edge does not
   count.
 
@@ -133,8 +134,11 @@ it much worse; `docs/experiments.md` has the numbers.
 
 ### Keeping the best
 
-Every few minutes each map is scored on eight runs, and the best version so far
-on each map is kept.
+Every few minutes each map is scored on eight runs of a frozen copy of the
+policy, and the best version so far on each map is kept. The wind-up picks its
+moves by chance in these runs, as it does in training, from a seed fixed per
+run so a scoring can be repeated. Only a run that opened with the bot's own
+wind-up can count as beating a record.
 
 ## Timer rules
 

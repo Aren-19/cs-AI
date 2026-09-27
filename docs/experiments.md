@@ -454,6 +454,33 @@ runs from the start reaching 7.9% of the map on average and 17% at best in the
 first batch. surf_dune stays out of training as the test of how well it handles
 a new map.
 
+## Bug hunt before the long run
+
+A sweep over the plugin, the learner and the scripts, with every finding checked
+by three separate reviews before it counted. What it found and what changed:
+
+- **Training signal.** A stuck run was bootstrapped like a time limit, which
+  pulled the values of dead-end states towards about -400; it now ends the
+  episode. The first key press after a reset paid a switch cost for a key that
+  was never held. A stale wind-up air-time input reached the run policy after a
+  recorded opening. The first wind-up episode after every weight update ended on
+  its first tick, before the bot had landed at the spawn.
+- **Hands.** The physical key could flicker on and off inside one commanded
+  press, which gave the 1-2 tick taps the human check flagged; it now stays down
+  once pressed. The recorded wind-up handed over a still mouse and no key, a
+  view snap in every run opened that way; the run now takes over the recording's
+  hands.
+- **Scoring.** Evaluations picked the wind-up's single likeliest action, and the
+  jump almost never is, so the evaluated wind-up stood still while the trained
+  one jumped; the wind-up now samples in evaluations from a fixed seed per run.
+  The checkpoint kept as the best was a few generations newer than the one that
+  was measured; evaluations now run a frozen copy. Timed-out runs were not
+  counted, and an evaluation that wrote nothing was credited with the one before.
+- **Scripts.** Several PowerShell checks treated one running slot as none, or a
+  single map as a list of letters. Best files were tied to a map's place in the
+  list. With fewer servers than maps, some maps never trained; they now take
+  turns. Manual `train.ps1` batches were read by the live learner.
+
 ## Where it stands
 
 Before the hands change, on the older surf_demise line:

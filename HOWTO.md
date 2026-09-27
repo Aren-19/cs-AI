@@ -132,6 +132,7 @@ arguments:
 | `-MouseMax` | 7 | mouse speed, degrees per tick |
 | `-MinPress` | 12 | ticks a strafe key stays down |
 | `-MinCoast` | 6 | ticks with no key before the next press |
+| `-MaxCoast` | 16 | ticks with no key before a press is required |
 
 The start zone air allows a faster mouse change (2.5), as the recorded runs
 show. The policy only sees the actions these limits allow, and the learner
@@ -282,8 +283,10 @@ which finish time alone does not.
   crashes and restarts.
 - `logs/learner.log`, `logs/learner_<slot>.log` - the learner's output.
 - `logs/eval_<slot>.log` - every evaluation.
-- `data/best.txt`, `data/best_<slot>.txt` and `data/ckpt_best*.npz` - the best
-  evaluation so far and the checkpoint that made it.
+- `data/best.<map>.txt`, `data/best_<slot>.<map>.txt` and
+  `data/ckpt_best*.<map>.npz` - the best evaluation so far on each map and the
+  checkpoint that made it.
+- `data/records.txt` - every record the bot has beaten.
 - `cstrike/logs/csai_<slot>_a<N>.log` - each game server's console.
 - `data/train_log.csv` - one row per generation.
 - `docs/experiments.md` - each configuration change and whether it worked.
