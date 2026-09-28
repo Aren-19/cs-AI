@@ -25,3 +25,4 @@ data/weights_*.txt
 data/*_v1/
 data/records.txt
 data/game.txt
+data/*_checkpoints.json

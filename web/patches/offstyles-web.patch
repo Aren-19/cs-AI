@@ -36,7 +36,7 @@ index 141fc04..213f511 100644
  
 +  // Order of the list. The API already accepts these names and the view already
 +  // forwards them; this just exposes the choice, defaulting to newest first so
-+  // the run you just made is at the top.
++  // the latest run is at the top.
 +  const currentSort: Ref<string> = ref(urlParams.getAsObject().sort || 'Newest');
 +
 +  const sortChanged = async (event: Event) => {
@@ -77,7 +77,7 @@ index 4fe79d7..e038ccd 100644
      },
      proxy: {
 +      // Local backend (tools/webserve.py). Upstream points at https://offstyles.net,
-+      // whose API is closed and only knows their own replays - our bot's runs are
++      // whose API is closed and only knows their own replays - the bot's runs are
 +      // not in it. '/maps' is proxied too so the BSP is read from the local CS:S
 +      // install rather than a public FastDL mirror.
 +      '/maps': { target: 'http://127.0.0.1:8787', changeOrigin: false },

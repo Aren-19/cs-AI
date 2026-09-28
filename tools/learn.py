@@ -23,7 +23,7 @@ WEIGHTS = os.path.join(DATA, "weights.txt")
 TICK    = 0.015
 
 def find_next_batch(outdir, processed):
-    """Oldest completed batch we have not consumed yet."""
+    """Oldest completed batch not consumed yet."""
     best = None       # (stem, key, mtime)
     try:
         names = os.listdir(outdir)

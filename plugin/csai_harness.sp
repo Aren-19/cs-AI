@@ -117,7 +117,7 @@ public void OnPluginStart()
     RegServerCmd("csai_democapture", Cmd_DemoCapture, "Replay the human run and capture behaviour-cloning data");
 
     // Typed in chat as !csai_save / !csai_drop / !csai_runs
-    RegConsoleCmd("sm_csai_save", Cmd_RecSave, "Save the run you just did");
+    RegConsoleCmd("sm_csai_save", Cmd_RecSave, "Save the last run");
     RegConsoleCmd("sm_csai_drop", Cmd_RecDrop, "Throw away the current recording and start over");
     RegConsoleCmd("sm_csai_runs", Cmd_RecRuns, "How many recorded runs this map has");
     RegServerCmd("csai_prestrafe", Cmd_Prestrafe, "csai_prestrafe <0|1> - replay the recorded prestrafe before each run");

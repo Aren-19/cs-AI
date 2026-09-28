@@ -22,7 +22,7 @@ index 63a9672..1d718a0 100644
  
  const apiBaseUrl = "/api";
 -const fastdlBaseUrl = "https://main.fastdl.me/maps";
-+// Vendored change: serve the BSP from our own origin (proxied to the local
++// Vendored change: serve the BSP from the viewer's own origin (proxied to the local
 +// CS:S install) instead of a public FastDL mirror, so custom maps work offline.
 +const fastdlBaseUrl = "/maps";
  

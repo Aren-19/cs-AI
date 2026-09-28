@@ -160,6 +160,7 @@ float g_fStartSpeedCap = 475.0;  // combined speed kept on leaving the start zon
 float g_fLineJitter    = 0.0;    // training: how far the line shown to the policy may be shifted sideways
 float g_fEpTakeoffSpeed = 0.0;
 float g_fEpJumpInset   = 0.0;    // for the eval printout: how far inside the zone the jump was
+float g_fEpLastPos[3];           // origin on the last tick the run was scored, to spot map teleports
 float g_fEpFailSpeed   = 0.0;    // where a wind-up ended: its speed, and how far from the route
 float g_fEpEndDist     = 600.0;
 
@@ -439,6 +440,9 @@ stock void Ep_MouseAim(float aimYaw, float acc, float wmax)
 stock int Ep_HandKey(int cmd)
 {
 	if (cmd == 0 || g_iKeySide == cmd || g_iCmdHeld >= g_iMinCoast)
+		return cmd;
+	// Hands never stay off the keys longer than MaxCoast, waiting or not.
+	if (g_iKeySide == 0 && g_iMaxCoast > 0 && g_iKeyHeld >= g_iMaxCoast)
 		return cmd;
 	if (g_fMouseW * float(cmd) < -0.5)
 		return 0;
@@ -977,6 +981,7 @@ stock void Ep_Reset()
 
 	float closest[3], dist;
 	g_fEpStartS = Track_Project(pos, g_iTrackHint, closest, dist);
+	g_fEpLastPos[0] = pos[0]; g_fEpLastPos[1] = pos[1]; g_fEpLastPos[2] = pos[2];
 
 	g_fEpLastS      = g_fEpStartS;
 	g_fEpBestS      = g_fEpStartS;
@@ -1114,11 +1119,25 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	if (!g_bEpClockOn && !g_bEpGround && !Zone_Touching(pos))
 		Ep_StartClock(client, vel);
 
+	// A map teleport (a fall trigger) moves the bot further in one tick than it
+	// can travel. That is a fall, and the route search is not to be trusted there:
+	// it only looks near the last point and would snap to the edge of its window.
+	bool teleported = !g_bEpGround && GetVectorDistance(pos, g_fEpLastPos) > 256.0;
+	g_fEpLastPos[0] = pos[0]; g_fEpLastPos[1] = pos[1]; g_fEpLastPos[2] = pos[2];
+	if (teleported)
+	{
+		g_iTrackHint = Track_Nearest(pos, -1);
+		Ep_End(EP_FELL);
+		return false;
+	}
+
 	g_iTrackHint = Track_Nearest(pos, g_iTrackHint);
 
 	float closest[3], dist;
 	float s = Track_Project(pos, g_iTrackHint, closest, dist);
-	if (s > g_fEpBestS + 1.0)
+	// Progress counts only near the route: off it the nearest point is a guess.
+	bool onRoute = (dist <= g_fMaxDeviation);
+	if (onRoute && s > g_fEpBestS + 1.0)
 	{
 		g_fEpBestS = s;
 		g_iEpNoProgress = 0;
@@ -1131,8 +1150,9 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	// This tick's position is the result of the decision in flight, so its
 	// progress and deviation are charged to that decision before a new one starts.
 	// A wind-up is scored on its run alone.
-	float dS = s - g_fEpLastS;
-	g_fEpLastS = s;
+	float dS = onRoute ? (s - g_fEpLastS) : 0.0;
+	if (onRoute)
+		g_fEpLastS = s;
 	if (g_iWindupTicks == 0)
 	{
 		g_fEpStepReward += dS / 100.0;
@@ -1305,7 +1325,8 @@ stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
 		g_iEpStuckTicks = 0;
 
 	// A truncated track ends where the point limit cut it, not at the finish.
-	if (!g_bEpGround && !g_bTrackTruncated && g_fTrackLength > 0.0 && s >= g_fTrackLength - 96.0)
+	if (!g_bEpGround && !g_bTrackTruncated && g_fTrackLength > 0.0 && s >= g_fTrackLength - 96.0 &&
+	    dist <= g_fMaxDeviation)
 		return Ep_End(EP_FINISHED);
 	if (!g_bEpGround && dist > g_fMaxDeviation)
 		return Ep_End(EP_FELL);

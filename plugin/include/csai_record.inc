@@ -147,7 +147,7 @@ stock bool Rec_Human_Save(int client)
 	return true;
 }
 
-/** Whoever is playing and is not our bot. */
+/** Whoever is playing and is not the bot. */
 stock void Rec_Human_Track(int client)
 {
 	if (client == g_iBot || IsFakeClient(client))

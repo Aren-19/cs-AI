@@ -60,8 +60,9 @@ def zone(mapname):
 
 def key_holds(buttons):
     """Lengths of each unbroken A-only or D-only press."""
-    side = np.where((buttons & IN_MOVELEFT) & ~(buttons & IN_MOVERIGHT), 1,
-                    np.where((buttons & IN_MOVERIGHT) & ~(buttons & IN_MOVELEFT), -1, 0))
+    left = (buttons & IN_MOVELEFT) != 0
+    right = (buttons & IN_MOVERIGHT) != 0
+    side = np.where(left & ~right, 1, np.where(right & ~left, -1, 0))   # both or none: no press
     holds, cur, n = [], 0, 0
     for s in side:
         if s == cur:
@@ -85,6 +86,16 @@ def measure(path, mapname):
     flg = np.array([f.flags for f in fr], dtype=np.int64)
     pre = int(r.preframes)
     n = len(fr)
+    # Some records started their timer on the jump, inside the zone. The run is
+    # measured from leaving the zone, as the bot's is, so move the split there.
+    z = zone(mapname)
+    if z is not None:
+        mn, mx = z
+        inside = ((pos[:, 0] >= mn[0]) & (pos[:, 0] <= mx[0]) & (pos[:, 1] >= mn[1]) & (pos[:, 1] <= mx[1]) &
+                  (pos[:, 2] < mx[2] - 31) & (pos[:, 2] + 72 > mn[2] + 31))
+        exit_tick = next((i for i in range(pre, n) if not inside[i]), None)
+        if exit_tick is not None and exit_tick - pre > 2:
+            pre = exit_tick
 
     step = np.r_[0.0, np.linalg.norm(np.diff(pos, axis=0), axis=1)]
     ok = step < 180.0                           # a teleport in a segmented run
@@ -121,7 +132,6 @@ def measure(path, mapname):
         if len(lift):
             j = int(lift[-1]) + 1
             out["zone_air_ticks"] = pre - j
-            z = zone(mapname)
             if z is not None:
                 mn, mx = z
                 p = pos[j - 1]

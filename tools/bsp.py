@@ -138,7 +138,7 @@ class BSP(object):
 
     def faces(self):
         """
-        dface_t is 56 bytes in v19/v20. We need planenum, side, firstedge,
+        dface_t is 56 bytes in v19/v20. Needed: planenum, side, firstedge,
         numedges, texinfo, dispinfo.
         """
         b = self.lump(LUMP_FACES)

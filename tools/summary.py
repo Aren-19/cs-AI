@@ -5,6 +5,8 @@ import csv
 import os
 import sys
 
+from game import CSTRIKE
+
 BLOCKS = " .:-=+*#%@"
 
 def spark(values, width=48):
@@ -34,8 +36,36 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap.add_argument("--log", default=os.path.join(here, "..", "data", "train_log.csv"))
     ap.add_argument("--tail", type=int, default=20)
-    ap.add_argument("--track-length", type=float, default=135547.0)
+    ap.add_argument("--map", default=None, help="default: data/map.txt")
+    ap.add_argument("--track-length", type=float, default=None, help="default: from the map's track")
     args = ap.parse_args()
+
+    # Several maps share one log; this is about one of them.
+    mapname = args.map
+    if not mapname:
+        try:
+            with open(os.path.join(here, "..", "data", "map.txt"), encoding="utf-8-sig") as fh:
+                mapname = fh.read().strip()
+        except OSError:
+            pass
+    mapname = mapname or "surf_demise"
+    data = os.path.join(CSTRIKE, "addons", "sourcemod", "data", "csai")
+
+    def header_value(path, key):
+        try:
+            with open(path, encoding="utf-8-sig") as fh:
+                for line in fh:
+                    if not line.startswith("#"):
+                        break
+                    if key in line:
+                        return float(line.split(key)[1].split()[0])
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    if args.track_length is None:
+        args.track_length = header_value(os.path.join(data, "%s_track.txt" % mapname), "length=") or 0.0
+    reference = header_value(os.path.join(data, "%s_states.txt" % mapname), "clean_time=")
 
     if not os.path.exists(args.log):
         print("no log at %s" % args.log)
@@ -43,9 +73,11 @@ def main():
 
     with open(args.log) as fh:
         rows = list(csv.DictReader(fh))
+    rows = [r for r in rows if r.get("map") in (None, "", mapname)]
     if not rows:
-        print("log is empty")
+        print("no generations for %s in the log" % mapname)
         return 1
+    print("map         : %s" % mapname)
 
     def col(name, cast=float):
         return [cast(r[name]) for r in rows]
@@ -105,7 +137,10 @@ def main():
             print("trend: flat (mean gain %.3f%% -> %.3f%%)" % (early * 100, late * 100))
 
     print()
-    print("human reference: 39.10 s, 100% of track (surf_demise, 66 tick, no deaths)")
+    if reference:
+        print("record to beat: %.3f s from leaving the start zone (%s)" % (reference, mapname))
+    else:
+        print("no record found for %s" % mapname)
     return 0
 
 if __name__ == "__main__":

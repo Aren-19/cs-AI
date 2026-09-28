@@ -93,7 +93,9 @@ function Get-BotBest([string]$m, [bool]$first) {
     if (-not (Test-Path $f)) { return $null }
     $v = (Get-Content $f -Raw).Trim() -split '\s+'
     if ($v.Count -lt 4) { return $null }
-    return [pscustomobject]@{ Gen = [int]$v[0]; Finished = [int]$v[1]; Runs = [int]$v[2]; Median = [double]$v[3] }
+    # The fifth field, the median of runs with the bot's own wind-up, is newer.
+    $own = if ($v.Count -ge 5) { [double]$v[4] } else { 999.0 }
+    return [pscustomobject]@{ Gen = [int]$v[0]; Finished = [int]$v[1]; Runs = [int]$v[2]; Median = [double]$v[3]; Own = $own }
 }
 
 function Show-Status {
@@ -112,9 +114,12 @@ function Show-Status {
             $finS = '{0}/{1}' -f $b.Finished, $b.Runs
             if ($b.Finished -gt 0) {
                 $botS = '{0:N2}s' -f $b.Median
-                if ($rec) {
-                    $d = $b.Median - $rec
+                # Only runs that opened with the bot's own wind-up are held against the record.
+                if ($rec -and $b.Own -lt 999) {
+                    $d = $b.Own - $rec
                     $note = if ($d -lt 0) { '  beats the record by {0:N2}s' -f (-$d) } else { '  {0:N2}s behind' -f $d }
+                } elseif ($rec) {
+                    $note = '  (no finish with its own wind-up yet)'
                 }
             }
         }

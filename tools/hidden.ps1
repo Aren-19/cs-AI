@@ -85,12 +85,38 @@ $SrcdsLogDir = Join-Path $GameRoot 'cstrike\logs'
 # Every server is LAN only and insecure, so it can never reach VAC.
 function Start-Srcds([string]$LogName, [int]$Port, [object[]]$ArgList) {
     New-Item -ItemType Directory -Force -Path $SrcdsLogDir | Out-Null
-    Remove-Item (Join-Path $SrcdsLogDir "$LogName.log") -ErrorAction SilentlyContinue
     $a = @('-console', '-game', 'cstrike', '-maxplayers', '6',
            '+sv_lan', '1', '-insecure', '-port', $Port,
            '+con_logfile', "logs/$LogName.log",
            '+servercfgfile', 'server_66.cfg') + $ArgList
-    return (Start-Hidden (Join-Path $GameRoot 'srcds_win64.exe') $a $GameRoot)
+    # Servers starting at the same moment race on the timer's config files, and
+    # the loser runs without some of its plugins. So servers start one at a time,
+    # each waits until its configs have run, and a start that lost a plugin is
+    # tried again.
+    $m = New-Object System.Threading.Mutex($false, 'Local\CsAI_SrcdsStart')
+    $held = $false
+    try { $held = $m.WaitOne(120000) } catch [System.Threading.AbandonedMutexException] { $held = $true }
+    try {
+        $p = $null
+        for ($try = 1; $try -le 3; $try++) {
+            Remove-Item (Join-Path $SrcdsLogDir "$LogName.log") -ErrorAction SilentlyContinue
+            $p = Start-Hidden (Join-Path $GameRoot 'srcds_win64.exe') $a $GameRoot
+            if (-not $p) { return $null }
+            $log = ''
+            for ($i = 0; $i -lt 160 -and -not $p.HasExited; $i++) {
+                Start-Sleep -Milliseconds 250
+                $log = Get-SrcdsLog $LogName
+                if ($log -match 'OnConfigsExecuted|Unable to load plugin') { break }
+            }
+            if ($log -notmatch 'Unable to load plugin' -or $try -eq 3) { return $p }
+            try { $p.Kill() } catch {}
+            Start-Sleep -Seconds 1
+        }
+        return $p
+    } finally {
+        if ($held) { $m.ReleaseMutex() }
+        $m.Dispose()
+    }
 }
 
 function Get-SrcdsLog([string]$LogName) {

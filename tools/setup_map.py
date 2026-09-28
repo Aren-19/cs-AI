@@ -249,7 +249,7 @@ def check(map_name):
                                 "the track past that point", False))
         elif out > 0:
             rows.append((label, "%d of %d ticks more than %.0f units off the track "
-                                "(worst %.0f) - do not clone from this one"
+                                "(worst %.0f) - a poor source for the route"
                          % (out, total, MAX_DEVIATION, worst), False))
         else:
             rows.append((label, "stays within %.0f units of the track" % worst, False))

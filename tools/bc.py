@@ -170,6 +170,12 @@ def main():
     print("strafe-key switches: human %.2f/s, cloned %.2f/s  (pre-BC policy was 19.79/s)"
           % (sw_h, sw_p))
 
+    # This replaces the trained policy, so the old one is kept beside it.
+    import shutil
+    for pth in (args.weights, args.ckpt):
+        if os.path.exists(pth):
+            shutil.copyfile(pth, pth + ".before_bc")
+            print("kept the previous %s as %s.before_bc" % (os.path.basename(pth), os.path.basename(pth)))
     write_weights(args.weights, policy, 1)
     print("published %s (gen 1, %d floats)" % (args.weights, POL_TOTAL))
 

@@ -199,9 +199,10 @@ Counting it would pay an enormous one-tick reward for being teleported.
 
 More recordings are the most useful addition to the project.
 
-The bot learns technique by copying recorded runs. surf_demise has eight. Runs
-that are slightly off the usual line are the ones it has least of, and they are
-what teach it to recover.
+Recorded runs give the bot its route, its restart points and the recorded
+wind-ups it opens with until its own is good; the policy itself learns by
+practice. surf_demise has eight. Runs slightly off the usual line are the ones
+it has least of, and they give it restart points where recovering is needed.
 
 ### Recording
 
@@ -235,7 +236,7 @@ low, or scrape through a section and save it. Five or six is enough to start.
 
 A recording only helps if it stays near the route the bot is scored against.
 `python tools/setup_map.py <map> --check` lists any that stray far enough to count
-as a fall, which makes them poor sources to clone technique from.
+as a fall, which makes them poor sources for the route and restart points.
 
 ### Commands
 
@@ -250,17 +251,19 @@ In chat:
 `!csai_save` covers partial runs: to supply a specific hard section rather than
 the whole map, run into that section and save there.
 
-### Retraining on new recordings
+### Using new recordings
+
+After adding runs, teach the map again so the route, the restart points and the
+recorded wind-ups include them:
 
 ```bash
-python tools/bc.py --epochs 400 --print
+CsAI.bat teach surf_demise
 ```
 
-Stop training first. `bc.py` republishes the policy as generation 1, which
-discards training done since the last copy. Restart training afterwards.
-
-Capture replays every recorded run through real physics in one pass, so five runs
-give about 6000 examples rather than 1200.
+`tools/bc.py` can instead copy a policy from a capture (`+csai_democapture`), but
+that replaces the trained policy with the copy, as generation 1. The old one is
+kept as `data/ckpt.npz.before_bc` and `weights.txt.before_bc`. It is only worth
+it to start a brand-new policy.
 
 ## Reports
 

@@ -115,6 +115,14 @@ function Get-Procs([string]$name, [string]$match) {
         Where-Object { $_.CommandLine -like $match })
 }
 
+# A remembered process id only counts while it is still this slot's server i:
+# Windows hands out a dead process's id again quickly.
+function Test-MyActor([int]$apid, [int]$i) {
+    if ($apid -le 0) { return $false }
+    $p = @(Get-CimInstance Win32_Process -Filter "ProcessId=$apid AND Name='srcds_win64.exe'" -ErrorAction SilentlyContinue)
+    return ($p.Count -gt 0 -and $p[0].CommandLine -match "\+csai_actor\s+$i(\s|$)" -and (Test-Mine $p[0].CommandLine))
+}
+
 function Test-Mine([string]$cl) {
     # Which slot a process belongs to, from its command line.
     $theirs = 'main'
@@ -329,6 +337,7 @@ function Read-EvalResult {
     if ($head -notmatch '^# \S+ \S+ (\S+)$' -or $Matches[1] -ne $script:EvalMap) { return $null }
     $gen = 0
     $times = @()
+    $ownTimes = @()
     $runs = 0
     $fastest = 0.0
     $record = 0.0
@@ -342,7 +351,10 @@ function Read-EvalResult {
         if ($l -match 'policy gen (\d+)') { $gen = [int]$Matches[1] }
         if ($l -match 'eval run \d+/\d+: (.+?) at [\d.]+% in ([\d.]+)s') {
             $runs++
-            if ($Matches[1] -eq 'FINISHED') { $times += [double]$Matches[2] }
+            if ($Matches[1] -eq 'FINISHED') {
+                $times += [double]$Matches[2]
+                if ($l -notmatch 'recorded opening') { $ownTimes += [double]$Matches[2] }
+            }
         }
     }
     if ($runs -eq 0) { return $null }
@@ -351,14 +363,20 @@ function Read-EvalResult {
         $st = @($times | Sort-Object)
         $med = ($st[[int][math]::Floor(($st.Count - 1) / 2)] + $st[[int][math]::Ceiling(($st.Count - 1) / 2)]) / 2
     }
+    $ownMed = 999.0
+    if ($ownTimes.Count) {
+        $st = @($ownTimes | Sort-Object)
+        $ownMed = ($st[[int][math]::Floor(($st.Count - 1) / 2)] + $st[[int][math]::Ceiling(($st.Count - 1) / 2)]) / 2
+    }
     return [pscustomobject]@{ Gen = $gen; Runs = $runs; Finished = $times.Count; Median = $med
-                              Fastest = $fastest; Record = $record }
+                              Fastest = $fastest; Record = $record; OwnMedian = $ownMed }
 }
 
 # How human the evaluated run looks, next to the record on that map.
 function Test-Humanlike([string]$m, [int]$gen) {
     $tag = if ($Slot) { "${Slot}_gen$gen" } else { "gen$gen" }
     $rep = Join-Path $Data "replays\$($m)_$tag.replay"
+    if (-not (Test-Path $rep)) { $rep = Join-Path $Data "replays\$($m)_${tag}_dnf.replay" }   # nothing finished
     if (-not (Test-Path $rep)) { return }
     $sum = Join-Path $LogDir "humanlike$Sfx.txt"
     Remove-Item $sum -ErrorAction SilentlyContinue
@@ -369,7 +387,7 @@ function Test-Humanlike([string]$m, [int]$gen) {
     if (Test-Path $sum) { Write-Log "  looks: $((Get-Content $sum -Raw).Trim())" }
 }
 
-# The first map keeps the plain names; the others add the map to them.
+# Every map's best files carry its name: best<Sfx>.<map>.txt and ckpt_best<Sfx>.<map>.npz.
 function Best-Paths([string]$m) {
     return @((Join-Path $DataDir "best$Sfx.$m.txt"), (Join-Path $DataDir "ckpt_best$Sfx.$m.npz"))
 }
@@ -389,7 +407,8 @@ function Update-Best {
     $m = $script:EvalMap
     $bestFile, $bestCkpt = Best-Paths $m
     $b = Read-Best $bestFile
-    $line = "{0} {1} {2} {3:F3}" -f $r.Gen, $r.Finished, $r.Runs, $r.Median
+    # gen, finished, runs, median, and the median of runs with the bot's own wind-up
+    $line = "{0} {1} {2} {3:F3} {4:F3}" -f $r.Gen, $r.Finished, $r.Runs, $r.Median, $r.OwnMedian
     Write-Log ("  eval {0} gen {1}: {2}/{3} finished, median {4}" -f $m, $r.Gen, $r.Finished, $r.Runs,
                $(if ($r.Finished) { '{0:N2}s' -f $r.Median } else { '-' }))
     Test-Humanlike $m $r.Gen
@@ -423,7 +442,7 @@ function Update-Best {
 }
 
 function Restart-Actor([int]$i) {
-    if ($ActorPids.ContainsKey($i) -and $ActorPids[$i] -gt 0) {
+    if ($ActorPids.ContainsKey($i) -and (Test-MyActor $ActorPids[$i] $i)) {
         Stop-Process -Id $ActorPids[$i] -Force -ErrorAction SilentlyContinue
     }
     $script:ActorPids[$i] = Start-Actor $appliedLevel $i
@@ -472,8 +491,7 @@ while ($true) {
     $learning = ($gen -ne $lastGen)
 
     for ($i = 0; $i -lt $Actors; $i++) {
-        $alive = $ActorPids.ContainsKey($i) -and $ActorPids[$i] -gt 0 -and
-                 [bool](Get-Process -Id $ActorPids[$i] -ErrorAction SilentlyContinue)
+        $alive = $ActorPids.ContainsKey($i) -and (Test-MyActor $ActorPids[$i] $i)
         if (-not $alive) {
             Write-Log "server $i died - restarting"
             Restart-Actor $i

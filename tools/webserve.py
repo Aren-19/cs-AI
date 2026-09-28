@@ -16,10 +16,12 @@ from vpk import SourceFS
 from replaystats import stats as replay_stats
 
 from game import CSTRIKE
+# (tag, folder). The timer keeps one record per style under the same file name,
+# so a record's id carries its style: bhop_bfur@7. The bot's replays have no tag.
 REPLAY_DIRS = [
-    os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\replays"),
-    os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\0"),
-    os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\7"),
+    ("",  os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\replays")),
+    ("0", os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\0")),
+    ("7", os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\7")),
 ]
 MAPS_DIRS = (os.path.join(CSTRIKE, "maps"), os.path.join(CSTRIKE, "download", "maps"))
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "webcache")
@@ -58,11 +60,16 @@ def find_replay(name):
     # This used to accept an absolute path and serve it. Together with a
     # wildcard CORS header that let any page in the browser read any file on
     # the machine while the viewer was running.
+    tag = None
+    if "@" in name:
+        name, tag = name.rsplit("@", 1)
     cand = name if name.lower().endswith(".replay") else name + ".replay"
     cand = os.path.basename(cand)
     if not cand or cand in (".", ".."):
         return None
-    for d in REPLAY_DIRS:
+    for t, d in REPLAY_DIRS:
+        if tag is not None and t != tag:
+            continue
         p = os.path.join(d, cand)
         if not os.path.isfile(p):
             continue
@@ -104,16 +111,20 @@ def replay_header(path):
 
 def list_replays():
     out = []
-    for d in REPLAY_DIRS:
+    for tag, d in REPLAY_DIRS:
         if not os.path.isdir(d):
             continue
         for n in sorted(os.listdir(d)):
             if n.lower().endswith(".replay"):
                 full = os.path.join(d, n)
                 info = replay_header(full) or {}
-                out.append({"name": n[:-7], "path": full,
+                base = n[:-7]
+                out.append({"name": base if not tag else "%s@%s" % (base, tag), "path": full,
+                            # a timer record always finished; a bot run saved unfinished is <name>_dnf
+                            "finished": bool(tag) or not base.endswith("_dnf"),
+                            "human": bool(tag),
                             "size": os.path.getsize(full),
-                            "map": info.get("map") or n[:-7],
+                            "map": info.get("map") or base,
                             "time": float(info.get("time") or 0.0),
                             "style": int(info.get("style") or 0),
                             "track": int(info.get("track") or 0),
@@ -240,9 +251,9 @@ class Handler(BaseHTTPRequestHandler):
             if sort in ("oldest", "old"):
                 rows.sort(key=lambda r: r["date"])
             elif sort in ("fastest", "time"):
-                rows.sort(key=lambda r: (r["time"] <= 0, r["time"]))
+                rows.sort(key=lambda r: (not r["finished"], r["time"] <= 0, r["time"]))
             elif sort == "slowest":
-                rows.sort(key=lambda r: (r["time"] <= 0, -r["time"]))
+                rows.sort(key=lambda r: (not r["finished"], r["time"] <= 0, -r["time"]))
             else:                                     # Newest
                 rows.sort(key=lambda r: r["date"], reverse=True)
             for i, r in enumerate(rows):
@@ -272,12 +283,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _times(self):
         rows = list_replays()
-        # best time per map, so the UI can show a delta like the real site does
-        best = {}
+        # The record per map, so the UI can show a delta like the real site does:
+        # the timer's own record when there is one, else the fastest finished bot
+        # run. A run that did not finish has a short time but is no record.
+        best, human = {}, {}
         for r in rows:
             t = r["time"]
-            if t > 0 and (r["map"] not in best or t < best[r["map"]]):
-                best[r["map"]] = t
+            if t <= 0 or not r["finished"]:
+                continue
+            pool = human if r["human"] else best
+            if r["map"] not in pool or t < pool[r["map"]]:
+                pool[r["map"]] = t
+        best.update(human)
 
         out = []
         for i, r in enumerate(rows):
@@ -300,6 +317,7 @@ class Handler(BaseHTTPRequestHandler):
                 "is_banned": False,
                 "invalid_ref": None,
                 "server": {"hostname": "local", "key_id": "local"},
+                "finished": r["finished"],
                 "sync": st["sync"],
                 "strafes": st["strafes"],
                 "jumps": st["jumps"],

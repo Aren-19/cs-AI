@@ -106,8 +106,10 @@ no tick-perfect strafes:
 
 - The mouse has momentum. It speeds up and settles over several ticks instead of
   snapping, and never turns faster than a person does (7 degrees a tick).
-- A strafe key stays down at least 12 ticks. After letting go, the next press
-  waits at least 6 ticks and at most 16, so it never surfs hands-off for long.
+- In the run, a strafe key stays down at least 12 ticks. After letting go, the
+  next press waits at least 6 ticks and at most 16, so it never surfs hands-off
+  for long. The wind-up keeps a chosen side 12 ticks and is hands-off in the air
+  at most 16.
 - On a direction change the new key waits a moment while the mouse is still
   turning the old way, as it does for a person, instead of flipping in one tick.
   Once down, it stays down.
@@ -150,7 +152,8 @@ training follows the same rules:
   (`server/startzone-speedcap.sp`).
 - Bunnyhopping inside the start zone is blocked.
 - Replays keep the 4 seconds before the start zone is left, so the replay bot
-  shows the wind-up.
+  shows the wind-up (`shavit_replay_preruntime 4.0`, which is also the replay
+  recorder's default on this server, so a rewritten config keeps it).
 
 ## Power levels
 

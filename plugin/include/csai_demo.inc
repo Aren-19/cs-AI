@@ -17,7 +17,7 @@ int   g_iDemoPre   = 0;
 
 bool  g_bDemoActive = false;
 int   g_iDemoIndex  = 0;
-int   g_iDemoSide   = 1;      // our tracked state, chasing the human's
+int   g_iDemoSide   = 1;      // the bot's tracked state, chasing the human's
 int   g_iDemoTrim   = 0;
 int   g_iDemoWrote  = 0;
 File  g_hDemoOut    = null;
@@ -386,7 +386,7 @@ stock bool Demo_Tick(int client, int &buttons, float movement[3], float angles[3
 				vel[0] = 0.0; vel[1] = 0.0; vel[2] = 0.0;
 			}
 			TeleportEntity(client, g_fDemoPos[idx], ang, vel);
-			g_iTrackHint = -1;          // full search: we are somewhere new
+			g_iTrackHint = -1;          // full search: the bot is somewhere new
 		}
 	}
 

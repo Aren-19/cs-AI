@@ -402,7 +402,11 @@ The controls are now built like hands:
   twitch. Easing towards the target keeps acceleration near zero most of the
   time.
 - **Keys.** A key stays down 12 ticks, and after letting go the next press waits
-  6. The key comes up while the mouse still turns the other way, the gap a person
+  6.
+- **Jump line.** The jump now has to come from at least 16 units inside the zone,
+  down from 24. The wind-up no longer hands over on the jump but keeps flying the
+  zone air, and its score already rewards a good jump, so the line only has to
+  rule out stepping off the edge. The key comes up while the mouse still turns the other way, the gap a person
   leaves on a direction change.
 - **Masks.** Actions the hands cannot do right now are removed from the choice,
   both on the server and in the learner, so the policy never learns from actions

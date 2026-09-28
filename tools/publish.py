@@ -9,7 +9,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from ppo import Policy, write_weights
+from ppo import Policy, write_weights, fit_inputs
+from rollout import OBS_DIM
 
 from game import CSTRIKE
 WEIGHTS = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai\weights.txt")
@@ -36,10 +37,15 @@ def main():
         if key not in z:
             print("checkpoint has no %s - shape does not match this policy" % key)
             return 1
-        if z[key].shape != p.shape:
-            print("%s is %s, this policy wants %s" % (key, z[key].shape, p.shape))
+        w = z[key]
+        if i == 0 and w.ndim == 2 and w.shape[1] != OBS_DIM:
+            # An older checkpoint: the new inputs start at zero weight, as on resume.
+            print("%s takes %d inputs, widening to %d" % (key, w.shape[1], OBS_DIM))
+            w = fit_inputs(w, OBS_DIM)
+        if w.shape != p.shape:
+            print("%s is %s, this policy wants %s" % (key, w.shape, p.shape))
             return 1
-        p[...] = z[key]
+        p[...] = w
         n += 1
     gen = int(z["gen"]) if "gen" in z else 0
     write_weights(args.weights, policy, gen)

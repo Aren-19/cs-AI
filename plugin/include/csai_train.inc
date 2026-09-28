@@ -167,7 +167,7 @@ stock void Train_Stop()
 		ServerCommand("quit");
 }
 
-/** Poll for a policy newer than the one we are running. */
+/** Poll for a policy newer than the running one. */
 stock bool Train_TryLoadNewWeights()
 {
 	char path[PLATFORM_MAX_PATH];
@@ -203,7 +203,7 @@ stock void Train_EndOfBatch()
 
 	if (g_bTrainSync)
 	{
-		g_bTrainWaiting = true;      // Train_Poll resumes us when weights land
+		g_bTrainWaiting = true;      // Train_Poll resumes training when weights land
 		g_fTrainStart = GetEngineTime();
 		return;
 	}
@@ -368,11 +368,23 @@ stock void Eval_EpisodeDone()
 		g_fEvalBestFrac = frac;
 	if (keep)
 	{
+		// An unfinished run is saved as <tag>_dnf, so nothing mistakes it for a
+		// finished time. A finish replaces this generation's unfinished one.
 		char tag[96];
 		if (g_sSlot[0] == '\0')
 			Format(tag, sizeof(tag), "gen%d", g_iPolicyGen);
 		else
 			Format(tag, sizeof(tag), "%s_gen%d", g_sSlot, g_iPolicyGen);
+		char map[PLATFORM_MAX_PATH], path[PLATFORM_MAX_PATH];
+		GetCurrentMap(map, sizeof(map));
+		if (finished)
+		{
+			BuildPath(Path_SM, path, sizeof(path), "data/csai/replays/%s_%s_dnf.replay", map, tag);
+			if (FileExists(path))
+				DeleteFile(path);
+		}
+		else
+			StrCat(tag, sizeof(tag), "_dnf");
 		Rec_Stop();
 		Rec_Save(tag, secs);
 	}
