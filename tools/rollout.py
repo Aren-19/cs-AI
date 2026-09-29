@@ -258,6 +258,14 @@ def episode_mask(ep):
         return ep.mask
     return np.full(ep.n, MASK_ALL, dtype=np.int64)
 
+def timed_steps(ep):
+    """Decisions made on the timer's clock. Decisions in the start zone before it
+    starts carry a zone-edge input (Ep_FillExtra); a format 1 batch has none."""
+    if ep.obs is None or ep.n == 0:
+        return ep.n
+    off = np.nonzero(ep.obs[:, OBS_EXTRA + 6] == 0.0)[0]
+    return ep.n - (int(off[0]) if len(off) else ep.n)
+
 def mask_bool(bits):
     """(n,) int bits -> (n, N_ACTIONS) bool."""
     return ((np.asarray(bits)[:, None] >> np.arange(N_ACTIONS)) & 1).astype(bool)

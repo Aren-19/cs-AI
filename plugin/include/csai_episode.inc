@@ -542,7 +542,7 @@ stock int Ep_WindupMask()
 				mask &= ~(1 << a);
 	}
 	// In the air, hands stay off the keys only briefly.
-	if (g_bWindupJumped && g_iCmdSide == 0 && g_iMaxCoast > 0 && g_iCmdHeld >= g_iMaxCoast)
+	if (g_bWindupJumped && g_iCmdSide == 0 && g_iMaxCoast > 0 && g_iCmdHeld + g_iFrameSkip > g_iMaxCoast)
 		mask &= ~(1 << POL_COAST);
 	return mask;
 }
@@ -708,7 +708,7 @@ stock int Ep_RunMask()
 	}
 	else if (g_iCmdSide == 0 && g_iCmdHeld < g_iMinCoast)
 		mask = (1 << POL_COAST);
-	else if (g_iCmdSide == 0 && g_iMaxCoast > 0 && g_iCmdHeld >= g_iMaxCoast)
+	else if (g_iCmdSide == 0 && g_iMaxCoast > 0 && g_iCmdHeld + g_iFrameSkip > g_iMaxCoast)
 		mask &= ~(1 << POL_COAST);          // a person does not surf hands-off for long
 	return mask;
 }
@@ -977,7 +977,11 @@ stock void Ep_Reset()
 	GetClientAbsOrigin(g_iBot, pos);
 	GetEntPropVector(g_iBot, Prop_Data, "m_vecVelocity", vel);
 
-	g_iTrackHint = Track_Nearest(pos, -1);       // full scan after a teleport
+	// A fresh baseline: search only the stretch of route this start can be on, so
+	// a later stretch passing nearby is never mistaken for it.
+	float sStart = (g_iEpStartState > 0 && g_iEpStartState < g_iStateCount)
+	               ? g_fStateFrac[g_iEpStartState] * g_fTrackLength : 0.0;
+	g_iTrackHint = Track_NearestBand(pos, sStart - 3000.0, sStart + 3000.0);
 
 	float closest[3], dist;
 	g_fEpStartS = Track_Project(pos, g_iTrackHint, closest, dist);
@@ -1119,19 +1123,33 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	if (!g_bEpClockOn && !g_bEpGround && !Zone_Touching(pos))
 		Ep_StartClock(client, vel);
 
-	// A map teleport (a fall trigger) moves the bot further in one tick than it
-	// can travel. That is a fall, and the route search is not to be trusted there:
-	// it only looks near the last point and would snap to the edge of its window.
+	// A map teleport moves the bot further in one tick than it can travel. On a
+	// staged map, finishing a stage teleports to the next one, which the route
+	// continues from where it left off; any other teleport is a fall back.
 	bool teleported = !g_bEpGround && GetVectorDistance(pos, g_fEpLastPos) > 256.0;
 	g_fEpLastPos[0] = pos[0]; g_fEpLastPos[1] = pos[1]; g_fEpLastPos[2] = pos[2];
 	if (teleported)
 	{
-		g_iTrackHint = Track_Nearest(pos, -1);
-		Ep_End(EP_FELL);
-		return false;
+		int h = Track_NearestBand(pos, g_fEpLastS - 600.0, g_fEpLastS + 3000.0);
+		float c0[3], d0;
+		float s0 = Track_Project(pos, h, c0, d0);
+		if (d0 > g_fMaxDeviation || s0 < g_fEpLastS - 600.0)
+		{
+			g_iTrackHint = Track_Nearest(pos, -1);
+			Ep_End(EP_FELL);
+			return false;
+		}
+		g_iTrackHint = h;
+		g_fEpLastS = s0;             // the jump itself earns nothing
 	}
-
-	g_iTrackHint = Track_Nearest(pos, g_iTrackHint);
+	else
+	{
+		// Never further along the route than the bot can have gone this tick.
+		int h = Track_Nearest(pos, g_iTrackHint);
+		if (h >= 0 && FloatAbs(g_fTrackS[h] - g_fEpLastS) > 1000.0)
+			h = Track_NearestBand(pos, g_fEpLastS - 600.0, g_fEpLastS + 600.0);
+		g_iTrackHint = h;
+	}
 
 	float closest[3], dist;
 	float s = Track_Project(pos, g_iTrackHint, closest, dist);
@@ -1164,7 +1182,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		}
 	}
 
-	if (Ep_CheckEnd(client, s, dist, vel))
+	if (Ep_CheckEnd(client, pos, s, dist, vel))
 		return false;
 
 	// Wind-up slot: the policy being trained winds up and flies the zone.
@@ -1316,7 +1334,7 @@ stock void Ep_StartClock(int client, float vel[3])
 }
 
 /** Ends the episode if the current state is terminal. g_iEpTick ticks have run. */
-stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
+stock bool Ep_CheckEnd(int client, const float pos[3], float s, float dist, const float vel[3])
 {
 	float speed = SquareRoot(vel[0] * vel[0] + vel[1] * vel[1]);
 	if (speed < 40.0 && (GetEntityFlags(client) & FL_ONGROUND) && !g_bEpGround)
@@ -1325,8 +1343,12 @@ stock bool Ep_CheckEnd(int client, float s, float dist, const float vel[3])
 		g_iEpStuckTicks = 0;
 
 	// A truncated track ends where the point limit cut it, not at the finish.
-	if (!g_bEpGround && !g_bTrackTruncated && g_fTrackLength > 0.0 && s >= g_fTrackLength - 96.0 &&
-	    dist <= g_fMaxDeviation)
+	// A run finishes by entering the timer's end zone, as a player does. Without
+	// one, it finishes at the end of the route, on the route.
+	if (!g_bEpGround && g_bEndLoaded && End_Touching(pos, vel))
+		return Ep_End(EP_FINISHED);
+	if (!g_bEpGround && !g_bEndLoaded && !g_bTrackTruncated && g_fTrackLength > 0.0 &&
+	    s >= g_fTrackLength - 96.0 && dist <= g_fMaxDeviation)
 		return Ep_End(EP_FINISHED);
 	if (!g_bEpGround && dist > g_fMaxDeviation)
 		return Ep_End(EP_FELL);

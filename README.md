@@ -17,10 +17,11 @@ part of this should be pointed at a public server.
 
 | map | record to beat | bot, best so far | finishing |
 |---|---|---|---|
-| surf_demise | 38.27 s | retraining | - |
-| surf_utopia_njv | 54.67 s | retraining | - |
+| surf_demise | 38.23 s | retraining | - |
+| surf_utopia_njv | 54.66 s | retraining | - |
 
-Times run from leaving the start zone. Both records were set by hand.
+Times run from leaving the start zone to reaching the end zone, measured the same
+way for the bot and the record. Both records were set by hand.
 
 The bot now has to use its hands the way a person does (see below), so it is
 relearning both maps from where it was. With the old, instant view it finished

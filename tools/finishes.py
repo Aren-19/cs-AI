@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
-from rollout import read_batch, Track, EP_FINISHED, OUTCOME_NAMES
+from rollout import read_batch, Track, EP_FINISHED, OUTCOME_NAMES, timed_steps
 from learn import read_done
 
 from game import CSTRIKE
@@ -79,7 +79,7 @@ def main():
             name = OUTCOME_NAMES.get(e.outcome, "?")
             outcomes[name] = outcomes.get(name, 0) + 1
             if e.outcome == EP_FINISHED:
-                times.append(e.n * args.frameskip / TICKRATE)
+                times.append(timed_steps(e) * args.frameskip / TICKRATE)
             else:
                 deaths.append(e.best_s / track.length)
 

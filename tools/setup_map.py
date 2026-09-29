@@ -43,25 +43,41 @@ def paths(map_name):
     return {a: os.path.join(DATA, "%s_%s.txt" % (map_name, a)) for a in ARTEFACTS}
 
 def write_zone(map_name):
-    """Copy shavit's start zone (main track) to <map>_zone.txt for the plugin."""
+    """Copy shavit's start and end zones (main track) to <map>_zone.txt for the plugin."""
     import sqlite3
     if not os.path.isfile(SHAVIT_DB):
         return None
+    q = ("SELECT corner1_x, corner1_y, corner1_z, corner2_x, corner2_y, corner2_z "
+         "FROM mapzones WHERE map = ? AND type = ? AND track = 0 LIMIT 1")
     try:
         db = sqlite3.connect("file:%s?mode=ro" % SHAVIT_DB.replace("\\", "/"), uri=True)
-        row = db.execute("SELECT corner1_x, corner1_y, corner1_z, corner2_x, corner2_y, corner2_z "
-                         "FROM mapzones WHERE map = ? AND type = 0 AND track = 0 LIMIT 1",
-                         (map_name,)).fetchone()
+        start = db.execute(q, (map_name, 0)).fetchone()
+        end = db.execute(q, (map_name, 1)).fetchone()
         db.close()
     except sqlite3.Error:
         return None
-    if not row:
+    if not start:
         return None
     path = os.path.join(DATA, "%s_zone.txt" % map_name)
     with open(path, "w", encoding="ascii") as fh:
-        fh.write("# shavit start zone, main track\n")
-        fh.write("start %s\n" % " ".join("%.3f" % v for v in row))
+        fh.write("# shavit start and end zones, main track\n")
+        fh.write("start %s\n" % " ".join("%.3f" % v for v in start))
+        if end:
+            fh.write("end %s\n" % " ".join("%.3f" % v for v in end))
     return path
+
+def end_touching(pos, prev, zone):
+    """The end zone is reached: the player is in it, or the move it is making
+    takes it in (csai_track.inc End_Touching). The recorded runs' timers all stop
+    on the frame this finds."""
+    x0, y0, z0, x1, y1, z1 = zone
+    lo = (min(x0, x1) - 16, min(y0, y1) - 16)
+    hi = (max(x0, x1) + 16, max(y0, y1) + 16)
+    def inside(p):
+        return (lo[0] <= p[0] <= hi[0] and lo[1] <= p[1] <= hi[1] and
+                p[2] < max(z0, z1) - 31 and p[2] + 72 > min(z0, z1) + 31)
+    nxt = tuple(pos[k] + (pos[k] - prev[k]) for k in range(3))
+    return inside(pos) or inside(nxt)
 
 def zone_touching(pos, zone):
     """Inside the zone as shavit counts it: its trigger is the box shrunk by 16
@@ -81,12 +97,14 @@ def rezone_reference(map_name):
     p = paths(map_name)
     if not (os.path.isfile(zpath) and os.path.isfile(p["states"]) and os.path.isfile(p["demo"])):
         return None
-    zone = None
+    zone = end = None
     with open(zpath, encoding="ascii") as fh:
         for line in fh:
             f = line.split()
             if len(f) == 7 and f[0] == "start":
                 zone = [float(v) for v in f[1:]]
+            elif len(f) == 7 and f[0] == "end":
+                end = [float(v) for v in f[1:]]
     pre = header_value(p["demo"], "preframes=", int)
     rate = header_value(p["demo"], "tickrate=")
     if zone is None or pre is None or not rate:
@@ -108,9 +126,19 @@ def rezone_reference(map_name):
     base = header_value(p["states"], "jump_clean_time=") or header_value(p["states"], "clean_time=")
     if not base:
         return None
-    if exit_tick - pre <= 2:
+    # Timed the way the bot is: from the first tick outside the start zone to the
+    # first tick inside the end zone. Without an end zone, from the jump time.
+    enter = None
+    if end is not None:
+        enter = next((i for i in range(exit_tick + 1, len(frames)) if end_touching(frames[i], frames[i - 1], end)), None)
+    if enter is not None:
+        new = (enter - exit_tick) / rate
+    elif exit_tick - pre <= 2:
         return None                          # recorded under the zone-exit timer already
-    new = base - (exit_tick - pre) / rate
+    else:
+        new = base - (exit_tick - pre) / rate
+    if abs(new - (header_value(p["states"], "clean_time=") or 0.0)) < 0.0005:
+        return None                          # already timed this way
     words = [w for w in head.split(" ") if not w.startswith(("clean_time=", "jump_clean_time="))]
     lines[0] = " ".join(words) + " clean_time=%.3f jump_clean_time=%.3f" % (new, base)
     with open(p["states"], "w", encoding="utf-8", newline="\n") as fh:

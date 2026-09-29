@@ -13,7 +13,7 @@ import numpy as np
 
 from ppo import (Policy, Value, Adam, compute_gae, ppo_update, write_weights, value_raw,
                  fit_inputs, POL_TOTAL)
-from rollout import (Track, read_batch, episode_obs, episode_mask, mask_bool,
+from rollout import (Track, read_batch, episode_obs, episode_mask, mask_bool, timed_steps,
                      load_state_arclengths, OUTCOME_NAMES, OBS_DIM, N_ACTIONS, EP_FINISHED)
 
 from game import CSTRIKE
@@ -335,7 +335,7 @@ def main():
                 run0 += 1
                 if ep.outcome == EP_FINISHED:
                     fin0 += 1
-                    fin0_steps.append(ep.n)
+                    fin0_steps.append(timed_steps(ep))
 
             start_s = float(state_s[ep.start_state]) if ep.start_state < len(state_s) else 0.0
             gained = max(float(ep.best_s) - start_s, 0.0)

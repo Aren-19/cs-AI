@@ -27,14 +27,19 @@ int   g_iTrackCount  = 0;
 float g_fTrackLength = 0.0;
 int   g_iTrackHint   = -1;       // last nearest index, for incremental search
 
-// shavit's start zone, from data/csai/<map>_zone.txt: "start x0 y0 z0 x1 y1 z1".
+// shavit's start and end zones, from data/csai/<map>_zone.txt:
+// "start x0 y0 z0 x1 y1 z1" and "end x0 y0 z0 x1 y1 z1".
 float g_fZoneMin[3];
 float g_fZoneMax[3];
 bool  g_bZoneLoaded = false;
+float g_fEndMin[3];
+float g_fEndMax[3];
+bool  g_bEndLoaded = false;
 
 stock void Zone_Load()
 {
 	g_bZoneLoaded = false;
+	g_bEndLoaded = false;
 
 	char map[PLATFORM_MAX_PATH];
 	GetCurrentMap(map, sizeof(map));
@@ -52,21 +57,40 @@ stock void Zone_Load()
 	while (!f.EndOfFile() && f.ReadLine(line, sizeof(line)))
 	{
 		TrimString(line);
-		if (ExplodeString(line, " ", parts, sizeof(parts), sizeof(parts[])) < 7 || !StrEqual(parts[0], "start"))
+		if (ExplodeString(line, " ", parts, sizeof(parts), sizeof(parts[])) < 7)
+			continue;
+		bool isStart = StrEqual(parts[0], "start"), isEnd = StrEqual(parts[0], "end");
+		if (!isStart && !isEnd)
 			continue;
 		for (int k = 0; k < 3; k++)
 		{
 			float a = StringToFloat(parts[1 + k]);
 			float b = StringToFloat(parts[4 + k]);
-			g_fZoneMin[k] = (a < b) ? a : b;
-			g_fZoneMax[k] = (a < b) ? b : a;
+			if (isStart)
+			{
+				g_fZoneMin[k] = (a < b) ? a : b;
+				g_fZoneMax[k] = (a < b) ? b : a;
+			}
+			else
+			{
+				g_fEndMin[k] = (a < b) ? a : b;
+				g_fEndMax[k] = (a < b) ? b : a;
+			}
 		}
-		g_bZoneLoaded = true;
+		if (isStart)
+			g_bZoneLoaded = true;
+		else
+			g_bEndLoaded = true;
 	}
 	delete f;
 	if (g_bZoneLoaded)
 		PrintToServer("[CsAI] start zone (%.0f %.0f %.0f) to (%.0f %.0f %.0f)",
 		              g_fZoneMin[0], g_fZoneMin[1], g_fZoneMin[2], g_fZoneMax[0], g_fZoneMax[1], g_fZoneMax[2]);
+	if (g_bEndLoaded)
+		PrintToServer("[CsAI] end zone (%.0f %.0f %.0f) to (%.0f %.0f %.0f)",
+		              g_fEndMin[0], g_fEndMin[1], g_fEndMin[2], g_fEndMax[0], g_fEndMax[1], g_fEndMax[2]);
+	else
+		PrintToServer("[CsAI] no end zone for %s - a run finishes at the end of the route", map);
 }
 
 /** Inside the start zone as shavit counts it: its trigger is the box shrunk by 16 sideways and 31 vertically. */
@@ -77,6 +101,32 @@ stock bool Zone_Touching(const float pos[3])
 	return pos[0] >= g_fZoneMin[0] && pos[0] <= g_fZoneMax[0]
 	    && pos[1] >= g_fZoneMin[1] && pos[1] <= g_fZoneMax[1]
 	    && pos[2] < g_fZoneMax[2] - 31.0 && pos[2] + 72.0 > g_fZoneMin[2] + 31.0;
+}
+
+stock bool End_Inside(const float p[3])
+{
+	return p[0] >= g_fEndMin[0] - 16.0 && p[0] <= g_fEndMax[0] + 16.0
+	    && p[1] >= g_fEndMin[1] - 16.0 && p[1] <= g_fEndMax[1] + 16.0
+	    && p[2] < g_fEndMax[2] - 31.0 && p[2] + 72.0 > g_fEndMin[2] + 31.0;
+}
+
+/**
+ * The end zone is reached, as the timer counts it: the player is in it now, or
+ * this tick's move takes it in. Fitted on the recorded runs, whose timers all
+ * stop on the tick found this way. tools/setup_map.py times the record the same way.
+ */
+stock bool End_Touching(const float pos[3], const float vel[3])
+{
+	if (!g_bEndLoaded)
+		return false;
+	if (End_Inside(pos))
+		return true;
+	float dt = GetTickInterval();
+	float next[3];
+	next[0] = pos[0] + vel[0] * dt;
+	next[1] = pos[1] + vel[1] * dt;
+	next[2] = pos[2] + vel[2] * dt;
+	return End_Inside(next);
 }
 
 /** Horizontal distance from the player to the nearest side of the start zone, as the timer measures it; negative outside. */
@@ -164,6 +214,29 @@ static stock float Sq(float v) { return v * v; }
 static stock float DistSqToPoint(const float pos[3], int i)
 {
 	return Sq(pos[0] - g_fTrackX[i]) + Sq(pos[1] - g_fTrackY[i]) + Sq(pos[2] - g_fTrackZ[i]);
+}
+
+/**
+ * Nearest route point among those between two arc lengths. A route can come
+ * back near itself (a later stretch passing just above an earlier one), so the
+ * search along the route is bounded by how far the bot can have got.
+ */
+stock int Track_NearestBand(const float pos[3], float sLo, float sHi)
+{
+	int best = -1;
+	float bestd = 0.0;
+	for (int i = 0; i < g_iTrackCount; i++)
+	{
+		if (g_fTrackS[i] < sLo || g_fTrackS[i] > sHi)
+			continue;
+		float d = DistSqToPoint(pos, i);
+		if (best < 0 || d < bestd)
+		{
+			bestd = d;
+			best = i;
+		}
+	}
+	return (best >= 0) ? best : Track_Nearest(pos, -1);
 }
 
 stock int Track_Nearest(const float pos[3], int hint)
