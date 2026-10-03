@@ -21,6 +21,7 @@ param(
     [int]$MinPress   = 12,
     [int]$MinCoast   = 6,
     [int]$MaxCoast   = 16,
+    [int]$SwitchGap  = 2,
     [string]$Weights = ''       # a frozen weights file in the server's data/csai; blank = the live one
 )
 
@@ -46,6 +47,7 @@ $a = @(
     '+csai_switchcost', $SwitchCost,
     '+csai_mouseacc', $MouseAcc, '+csai_mousemax', $MouseMax,
     '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast, '+csai_maxcoast', $MaxCoast,
+    '+csai_switchgap', $SwitchGap,
     '+csai_bench_timescale', $Timescale,
     '+csai_bench_quit', '1',
     '+csai_bench_delay', '8'

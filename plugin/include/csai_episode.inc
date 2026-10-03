@@ -87,6 +87,13 @@ float g_fFinishFloor   =  0.5;    // a finish never scores below this, however s
 float g_fTimePower     =  8.0;    // how sharply the payout falls off with time
 float g_fTrimCost      = 0.05;    // per change of trim between decisions
 float g_fStartMaxFrac  = 0.90;     // never start so near the end that the run finishes at once
+float g_fEnergyScale   = 40000.0;  // speed kept, 0.5 v^2 + g z, that earns 1; 0 = not rewarded
+float g_fEpLastE       = 0.0;
+bool  g_bEpEnergySet   = false;
+float g_fEpProgMark    = 0.0;      // route point the no-progress count last restarted from
+ConVar g_cvGravity     = null;
+
+#define PROG_STEP 64.0             // units along the route that count as moving on
 
 ArrayList g_hEpBuf = null;
 
@@ -113,6 +120,7 @@ float g_fGroundMax     = 3.5;
 int   g_iMinPress      = 12;     // ticks a strafe key stays down before it may change or lift
 int   g_iMinCoast      = 6;      // ticks with no key before one may be pressed again
 int   g_iMaxCoast      = 16;     // ticks with no key before one must be pressed; 0 = no limit
+int   g_iSwitchGap     = 2;      // run: ticks the new key may lag a change of side
 
 // The mouse eases towards the speed it is asked for, a share of the gap each
 // tick, so a swipe speeds up and settles like a hand instead of snapping.
@@ -435,11 +443,11 @@ stock void Ep_MouseAim(float aimYaw, float acc, float wmax)
 /**
  * The key the hand presses for a commanded side. Once down for the command it
  * stays down. At the start of a command it waits while the mouse still turns
- * the other way, as a person does on a reversal, but never longer than MinCoast.
+ * the other way, as a person does on a reversal, but never longer than wait ticks.
  */
-stock int Ep_HandKey(int cmd)
+stock int Ep_HandKey(int cmd, int wait)
 {
-	if (cmd == 0 || g_iKeySide == cmd || g_iCmdHeld >= g_iMinCoast)
+	if (cmd == 0 || g_iKeySide == cmd || g_iCmdHeld >= wait)
 		return cmd;
 	// Hands never stay off the keys longer than MaxCoast, waiting or not.
 	if (g_iKeySide == 0 && g_iMaxCoast > 0 && g_iKeyHeld >= g_iMaxCoast)
@@ -663,7 +671,7 @@ stock int Ep_WindupTick(int client, const float pos[3], const float vel[3],
 	// The key is the gesture's side, lifted while the mouse is still turning the
 	// other way, as a person does on a reversal.
 	Ep_SetCmd(g_bWindupCoast ? 0 : g_iWindupReqSide);
-	int key = Ep_HandKey(g_iCmdSide);
+	int key = Ep_HandKey(g_iCmdSide, g_iMinCoast);
 	Ep_SetKey(key);
 
 	if (inAir)
@@ -695,10 +703,10 @@ stock int Ep_WindupTick(int client, const float pos[3], const float vel[3],
 stock int Ep_RunMask()
 {
 	int mask = POL_MASK_ALL;
-	// The key comes down up to MinCoast ticks after it is asked for, so the side
+	// The key comes down up to SwitchGap ticks after it is asked for, so the side
 	// also stays until the key itself has been down MinPress ticks.
 	bool keyShort = (g_iKeySide == g_iCmdSide && g_iKeyHeld < g_iMinPress) ||
-	                (g_iKeySide != g_iCmdSide && g_iCmdHeld < g_iMinCoast + g_iMinPress);
+	                (g_iKeySide != g_iCmdSide && g_iCmdHeld < g_iSwitchGap + g_iMinPress);
 	if (g_iCmdSide != 0 && (g_iCmdHeld < g_iMinPress || keyShort))
 	{
 		mask &= ~(1 << POL_COAST);
@@ -733,7 +741,10 @@ stock void Ep_ApplyAction(const float vel[3], int &buttons, float movement[3], f
 	Ep_UpdatePitch(vel);
 
 	Ep_SetCmd(g_bEpCoast ? 0 : (useLeft ? 1 : -1));
-	int key = (g_fMouseAcc > 0.0) ? Ep_HandKey(g_iCmdSide) : g_iCmdSide;
+	// In the run the view follows the motion, so on a change of side it is
+	// always still turning the old way: the new key lags by SwitchGap at most.
+	// The recorded runs change side with the keys overlapping or straight on.
+	int key = (g_fMouseAcc > 0.0) ? Ep_HandKey(g_iCmdSide, g_iSwitchGap) : g_iCmdSide;
 	Ep_SetKey(key);
 	g_iKeyHeld++;
 	g_iCmdHeld++;
@@ -989,6 +1000,8 @@ stock void Ep_Reset()
 
 	g_fEpLastS      = g_fEpStartS;
 	g_fEpBestS      = g_fEpStartS;
+	g_fEpProgMark   = g_fEpStartS;
+	g_bEpEnergySet  = false;
 	g_iEpTick       = 0;
 	g_iEpSteps      = 0;
 	g_fEpReturn     = 0.0;
@@ -1156,8 +1169,11 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	// Progress counts only near the route: off it the nearest point is a guess.
 	bool onRoute = (dist <= g_fMaxDeviation);
 	if (onRoute && s > g_fEpBestS + 1.0)
-	{
 		g_fEpBestS = s;
+	// Creeping along a ledge a few units at a time is not moving on.
+	if (onRoute && s > g_fEpProgMark + PROG_STEP)
+	{
+		g_fEpProgMark = s;
 		g_iEpNoProgress = 0;
 	}
 	else if (!g_bEpGround)
@@ -1179,6 +1195,18 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			float off = dist / g_fMaxDeviation;
 			if (off > 1.0) off = 1.0;
 			g_fEpStepReward -= g_fDeviationCost * off * off;
+		}
+		// Speed kept, counting height, so a drop down a ramp neither earns nor
+		// costs: what changes it is a hard landing, a scrape or a strafe that
+		// brakes. Without this a bad landing shows only as slower progress for
+		// the rest of the run, too spread out to learn from.
+		if (g_fEnergyScale > 0.0)
+		{
+			float e = 0.5 * GetVectorDotProduct(vel, vel) + Ep_Gravity() * pos[2];
+			if (g_bEpEnergySet && g_bEpClockOn && !teleported)
+				g_fEpStepReward += (e - g_fEpLastE) / g_fEnergyScale;
+			g_fEpLastE = e;
+			g_bEpEnergySet = true;
 		}
 	}
 
@@ -1319,10 +1347,18 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 	return true;
 }
 
+stock float Ep_Gravity()
+{
+	if (g_cvGravity == null)
+		g_cvGravity = FindConVar("sv_gravity");
+	return (g_cvGravity != null) ? g_cvGravity.FloatValue : 800.0;
+}
+
 /** The timer starts: note the tick and cap the combined speed as the server does. */
 stock void Ep_StartClock(int client, float vel[3])
 {
 	g_bEpClockOn = true;
+	g_bEpEnergySet = false;          // the speed cap is the server's doing, not the bot's
 	g_iEpClockTick = g_iEpTick;
 	g_iEpPreTicks = g_iEpTick;
 	float sp = GetVectorLength(vel);
