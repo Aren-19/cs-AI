@@ -456,7 +456,7 @@ def main():
         allf = (resample(r.frames[:r.preframes], tr, args.tickrate)
                 + resample(run, tr, args.tickrate))
         with open(args.demo, "w") as fh:
-            print("# csai demo v1  map=%s tickrate=%.2f preframes=%d total=%d"
+            print("# csai demo v1  map=%s tickrate=%.2f preframes=%d total=%d source=timer"
                   % (r.map, args.tickrate, pre_n, len(allf)), file=fh)
             print("# idx x y z pitch yaw buttons", file=fh)
             for i, f in enumerate(allf):

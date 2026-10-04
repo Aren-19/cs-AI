@@ -9,10 +9,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from game import CSTRIKE
+from game import CSTRIKE, find_bsp, map_dirs
 DATA = os.path.join(CSTRIKE, r"addons\sourcemod\data\csai")
 REPLAYBOT = os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot")
-MAPS = (os.path.join(CSTRIKE, "maps"), os.path.join(CSTRIKE, "download", "maps"))
 SHAVIT_DB = os.path.join(CSTRIKE, r"addons\sourcemod\data\sqlite\shavit-local.sq3")
 
 ARTEFACTS = ("track", "states", "prestrafe", "demo")
@@ -48,7 +47,7 @@ def write_zone(map_name):
     if not os.path.isfile(SHAVIT_DB):
         return None
     q = ("SELECT corner1_x, corner1_y, corner1_z, corner2_x, corner2_y, corner2_z "
-         "FROM mapzones WHERE map = ? AND type = ? AND track = 0 LIMIT 1")
+         "FROM mapzones WHERE lower(map) = lower(?) AND type = ? AND track = 0 LIMIT 1")
     try:
         db = sqlite3.connect("file:%s?mode=ro" % SHAVIT_DB.replace("\\", "/"), uri=True)
         start = db.execute(q, (map_name, 0)).fetchone()
@@ -58,6 +57,7 @@ def write_zone(map_name):
         return None
     if not start:
         return None
+    os.makedirs(DATA, exist_ok=True)
     path = os.path.join(DATA, "%s_zone.txt" % map_name)
     with open(path, "w", encoding="ascii") as fh:
         fh.write("# shavit start and end zones, main track\n")
@@ -286,10 +286,52 @@ def check(map_name):
     rows.append(("start zone", "present" if os.path.isfile(zone) else
                  "missing - the wind-up hands over on takeoff only", False))
 
-    have_bsp = any(os.path.isfile(os.path.join(d, "%s.bsp" % map_name)) for d in MAPS)
+    have_bsp = find_bsp(map_name) is not None
     rows.append(("map file", "present" if have_bsp else "NOT INSTALLED", not have_bsp))
     ok = ok and have_bsp
     return ok, rows
+
+def demo_frames(path):
+    """Positions of a demo file, for telling two recordings apart."""
+    out = []
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            for line in fh:
+                if line.startswith("#") or not line.strip():
+                    continue
+                f = line.split()
+                out.append((float(f[1]), float(f[2]), float(f[3])))
+    except (OSError, ValueError, IndexError):
+        return None
+    return out
+
+def same_run(a, b):
+    """The same run, as the plugin's recorder and the timer's replay keep it."""
+    fa, fb = demo_frames(a), demo_frames(b)
+    if not fa or not fb or abs(len(fa) - len(fb)) > 3:
+        return False
+    end_a, end_b = fa[-1], fb[-1]
+    return sum((end_a[k] - end_b[k]) ** 2 for k in range(3)) ** 0.5 < 2.0
+
+def keep_recorded_run(map_name, new_demo):
+    """Recorded run 1 lives in <map>_demo.txt, which a teach rewrites from the
+    timer's replay. A run the plugin recorded there moves to the next free slot,
+    unless it is the timer's run itself."""
+    p = paths(map_name)
+    old = p["demo"]
+    if not os.path.isfile(old):
+        return
+    with open(old, encoding="utf-8-sig", errors="replace") as fh:
+        head = fh.readline()
+    if "source=timer" in head or same_run(old, new_demo):
+        return
+    for n in range(2, 33):
+        dst = os.path.join(DATA, "%s_demo_%d.txt" % (map_name, n))
+        if not os.path.exists(dst):
+            os.replace(old, dst)
+            print("  recorded run 1 kept as %s" % os.path.basename(dst))
+            return
+    print("  all 32 run slots are full; recorded run 1 is replaced by the timer's run")
 
 def report(map_name):
     ok, rows = check(map_name)
@@ -310,8 +352,10 @@ def main():
     ap.add_argument("--check", action="store_true", help="validate; only refreshes the start zone and the reference time")
     ap.add_argument("--brief", action="store_true", help="leave out the closing advice")
     args = ap.parse_args()
+    args.map = args.map.lower()             # as the timer and the game name it
 
     print("== %s ==" % args.map)
+    os.makedirs(DATA, exist_ok=True)
     if write_zone(args.map):
         print("  start zone copied from the timer's database")
     retime(args.map)
@@ -327,19 +371,29 @@ def main():
         print("  set a time on the map with the timer first, or pass --replay <file>")
         return 1
     print("  source: %s" % replay)
+    if not find_bsp(args.map):
+        print("  map file NOT INSTALLED (looked in %s)" % ", ".join(map_dirs()))
+        return 1
 
+    # Written beside the old files first, so a failed run leaves them as they were.
     p = paths(args.map)
-    os.makedirs(DATA, exist_ok=True)
+    tmp = {a: p[a] + ".new" for a in ARTEFACTS}
     cmd = [sys.executable, os.path.join(HERE, "replay.py"), replay,
            "--spacing", str(args.spacing), "--checkpoints", str(args.checkpoints),
-           "--track", p["track"], "--states", p["states"],
-           "--prestrafe", p["prestrafe"], "--demo", p["demo"]]
+           "--track", tmp["track"], "--states", tmp["states"],
+           "--prestrafe", tmp["prestrafe"], "--demo", tmp["demo"]]
     res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
+    if res.returncode != 0 or not all(os.path.isfile(tmp[a]) for a in ARTEFACTS):
         print("  replay.py failed:")
         print(res.stdout[-2000:])
         print(res.stderr[-2000:])
+        for a in ARTEFACTS:
+            if os.path.isfile(tmp[a]):
+                os.remove(tmp[a])
         return 1
+    keep_recorded_run(args.map, tmp["demo"])
+    for a in ARTEFACTS:
+        os.replace(tmp[a], p[a])
 
     for line in res.stdout.splitlines():
         if line.startswith(("clean frames", "clean time", "segment", "  ")) or "dropped" in line:

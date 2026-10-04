@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vpk import SourceFS
 from replaystats import stats as replay_stats
 
-from game import CSTRIKE
+from game import CSTRIKE, find_bsp
 # (tag, folder). The timer keeps one record per style under the same file name,
 # so a record's id carries its style: bhop_bfur@7. The bot's replays have no tag.
 REPLAY_DIRS = [
@@ -23,7 +23,6 @@ REPLAY_DIRS = [
     ("0", os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\0")),
     ("7", os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot\7")),
 ]
-MAPS_DIRS = (os.path.join(CSTRIKE, "maps"), os.path.join(CSTRIKE, "download", "maps"))
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "webcache")
 
 # The viewer is served from another port, so it is cross-origin and does need a
@@ -134,7 +133,7 @@ def list_replays():
 def bsp_bz2(map_name):
     """Serves <map>.bsp.bz2, compressed once and cached."""
     safe = os.path.basename(map_name)
-    src = next((p for p in (os.path.join(d, safe + ".bsp") for d in MAPS_DIRS) if os.path.isfile(p)), None)
+    src = find_bsp(safe)
     if not src:
         return None
 

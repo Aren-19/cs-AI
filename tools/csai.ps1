@@ -146,6 +146,7 @@ switch ($Command.ToLower()) {
     }
     'teach' {
         if (-not $MapName) { Write-Host 'usage: CsAI.bat teach <map>'; exit 1 }
+        $MapName = $MapName.ToLower()           # as the timer and the game name it
         Write-Host "learning $MapName from its record run"
         & python (Join-Path $Root 'tools\setup_map.py') $MapName --brief
         if ($LASTEXITCODE -ne 0) { Write-Host "$MapName is not ready - see above"; exit 1 }
@@ -166,6 +167,7 @@ switch ($Command.ToLower()) {
     }
     'forget' {
         if (-not $MapName) { Write-Host 'usage: CsAI.bat forget <map>'; exit 1 }
+        $MapName = $MapName.ToLower()
         $all = @(Get-Maps 'main')
         if ($all -notcontains $MapName) { Write-Host "$MapName is not in training ($($all -join ', '))"; exit 1 }
         $maps = @($all | Where-Object { $_ -ne $MapName })

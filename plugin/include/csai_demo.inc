@@ -46,6 +46,15 @@ stock bool Demo_TickrateOk(const char[] header)
 	return (FloatAbs(rec - srv) / srv) < 0.01;
 }
 
+/** Creates data/csai if it is missing, as on a fresh install. */
+stock void Demo_MakeDataDir()
+{
+	char dir[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, dir, sizeof(dir), "data/csai");
+	if (!DirExists(dir))
+		CreateDirectory(dir, 511);
+}
+
 stock void Demo_Path(int i, char[] path, int maxlen)
 {
 	char map[PLATFORM_MAX_PATH];

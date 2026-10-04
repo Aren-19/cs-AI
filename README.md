@@ -17,17 +17,20 @@ part of this should be pointed at a public server.
 
 | map | record to beat | bot, best so far | finishing |
 |---|---|---|---|
-| surf_demise | 38.23 s | retraining | - |
-| surf_utopia_njv | 54.66 s | retraining | - |
+| surf_demise | 38.23 s | 40.99 s median, 8 of 8 | 5 to 7 of 8 |
+| surf_utopia_njv | 54.66 s | does not finish yet | 0 of 8 |
 
 Times run from leaving the start zone to reaching the end zone, measured the same
 way for the bot and the record. Both records were set by hand.
 
-The bot now has to use its hands the way a person does (see below), so it is
-relearning both maps from where it was. With the old, instant view it finished
-all 8 runs of an evaluation on surf_demise (median 40.08 s, fastest 39.84 s), but
-it strafed like a script: short key taps and a view locked to its direction of
-travel.
+The bot has to use its hands the way a person does (see below). With the old,
+instant view it finished all 8 runs of an evaluation on surf_demise (median
+40.08 s, fastest 39.84 s), but it strafed like a script.
+
+With hands it stalled about 3 seconds behind the record. It takes the record's
+line almost exactly but carries 4 to 6% less speed, lost a little at every ramp
+landing. It is now also rewarded for the speed it keeps, so a bad landing costs
+at the moment it happens (`docs/experiments.md`, "Why training stalled").
 
 `CsAI.bat status` shows the current numbers.
 
@@ -91,9 +94,9 @@ Each attempt is one whole run of a map.
 2. **The run.** From leaving the zone, the surfing policy flies the rest of the
    map. It picks the strafe key and how far the view should sit off the
    direction of travel, 33 times a second. The mouse eases towards that.
-3. **Scoring.** It is rewarded for distance along the route and for finishing,
-   and a finish pays more the faster it is than the record. That is what pushes
-   it past copying towards beating the time.
+3. **Scoring.** It is rewarded for distance along the route, for the speed it
+   keeps, and for finishing, and a finish pays more the faster it is than the
+   record. That is what pushes it past copying towards beating the time.
 
 The wind-up and the run are two policies trained side by side. The wind-up is
 judged on the finish time of the whole run that follows it, so it learns the
@@ -111,9 +114,10 @@ no tick-perfect strafes:
   next press waits at least 6 ticks and at most 16, so it never surfs hands-off
   for long. The wind-up keeps a chosen side 12 ticks and is hands-off in the air
   at most 16.
-- On a direction change the new key waits a moment while the mouse is still
-  turning the old way, as it does for a person, instead of flipping in one tick.
-  Once down, it stays down.
+- On a change of side the new key comes down within 2 ticks, as on the
+  recorded runs, where the two keys overlap or follow straight on. In the
+  wind-up it waits while the mouse is still turning the old way. Once down, a
+  key stays down.
 - The jump has to be well inside the start zone; stepping off the edge does not
   count.
 

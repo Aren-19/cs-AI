@@ -133,9 +133,13 @@ arguments:
 | `-MinPress` | 12 | ticks a strafe key stays down |
 | `-MinCoast` | 6 | ticks with no key before the next press |
 | `-MaxCoast` | 16 | ticks with no key before a press is required |
+| `-SwitchGap` | 2 | ticks the new key may lag a change of side in the run |
 
 The start zone air allows a faster mouse change (2.5), as the recorded runs
-show. The policy only sees the actions these limits allow, and the learner
+show. The run is also paid for the speed it keeps (`-EnergyScale`, default
+40000: that much of half the speed squared plus gravity times height earns 1, so
+dropping down a ramp neither earns nor costs, and a hard landing or a scrape
+costs at once). 0 turns it off. The policy only sees the actions these limits allow, and the learner
 knows which those were.
 
 `python tools/humanlike.py <replay>` puts a run next to the record on the same

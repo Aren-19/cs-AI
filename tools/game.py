@@ -5,6 +5,7 @@ data/game.txt, the Steam libraries Steam knows about, then Steam's default
 folder. tools/game.ps1 does the same for the PowerShell side.
 """
 
+import glob
 import os
 import re
 
@@ -76,6 +77,21 @@ GAME = find_game()
 CSTRIKE = os.path.join(GAME, "cstrike")
 SMDATA = os.path.join(CSTRIKE, "addons", "sourcemod", "data")
 DATA = os.path.join(SMDATA, "csai")
+
+def map_dirs():
+    """Where the game finds map files, in the order it looks (gameinfo.txt
+    mounts cstrike/custom/* before cstrike itself, and downloads last)."""
+    custom = sorted(glob.glob(os.path.join(CSTRIKE, "custom", "*", "maps")), key=str.lower)
+    return custom + [os.path.join(CSTRIKE, "maps"), os.path.join(CSTRIKE, "download", "maps")]
+
+def find_bsp(map_name):
+    """The map file the game would load, or None."""
+    name = os.path.basename(map_name)
+    for d in map_dirs():
+        p = os.path.join(d, name + ".bsp")
+        if os.path.isfile(p):
+            return p
+    return None
 
 if __name__ == "__main__":
     print(GAME)

@@ -77,6 +77,7 @@ Handle    g_hPollTimer      = null;
 public void OnPluginStart()
 {
     g_hTraj = new ArrayList(REC_FIELDS);
+    Demo_MakeDataDir();
     g_cvAirAccel  = FindConVar("sv_airaccelerate");
     g_cvTimescale = FindConVar("host_timescale");
     g_cvFpsMax    = FindConVar("fps_max");

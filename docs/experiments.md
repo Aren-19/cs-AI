@@ -484,6 +484,57 @@ by three separate reviews before it counted. What it found and what changed:
   single map as a list of letters. Best files were tied to a map's place in the
   list. With fewer servers than maps, some maps never trained; they now take
   turns. Manual `train.ps1` batches were read by the live learner.
+- **Teaching a map.** On a fresh install the first `teach` crashed and every run
+  the recorder saved was lost, because the data folder did not exist yet; it is
+  now created first. `teach` rewrote recorded run 1 with the timer's run; a run
+  the plugin recorded there now moves to the next free number. A map name typed
+  with capitals lost its start and end zones. Maps under `cstrike/custom` were
+  reported as not installed. A failed `teach` no longer leaves half-written route
+  files behind.
+
+## Why training stalled
+
+With hands, surf_demise stopped improving at about 41.1 s in evaluations against
+the 38.23 s record, finishing 5 to 7 runs of 8, and surf_utopia_njv never
+finished one, even from restart points at 90% of the map. The policy's entropy
+had fallen from 0.83 to 0.44, so it was hardly trying anything new.
+
+Measured on the replays, not guessed:
+
+- The bot's path on surf_demise is within 0.4% of the record's length, section by
+  section. It is not taking a longer line.
+- It is 4 to 6% slower in every section, and the gap grows steadily from about
+  90 u/s to 300 u/s.
+- Speed plus height (half the speed squared plus gravity times height) shows
+  where: along each ramp the bot keeps up with the record, and it falls behind in
+  steps at 10 to 15 ramp landings. At 7% it reaches the ramp heading -12 degrees
+  where the record heads -48, 190 units off the line, and loses its speed turning
+  onto it.
+- On surf_utopia_njv it lands 170 units too high on the ramp at 93%, slides onto
+  the flat top and loses its speed to friction (3070 to 500 u/s). The record
+  holds A through that whole stretch.
+- Keys: the record holds a key a median 34 to 40 ticks, changes side with the
+  keys overlapping 1 to 4 ticks or straight on, and is hands-off 5 to 6% of the
+  time. The bot held a median 14 ticks, waited 6 ticks on every change of side
+  (the reversal wait always fired, because in the run the view follows the motion
+  and is always still turning the old way), was hands-off 25% of the time, and
+  let go of and re-pressed the same key 37 to 59 times a run, against 3 to 5.
+
+A landing that loses speed only showed in the reward as slightly less progress
+over the following seconds, too spread out to learn from. Changes:
+
+- The run is paid for the speed it keeps: the change in half the speed squared
+  plus gravity times height, 1 per 40000, each tick. A hard landing costs 2 to 5
+  at the decision before it; over a whole surf_demise run it comes to about -105,
+  against about 1350 for progress.
+- On a change of side the new key lags by at most 2 ticks instead of 6.
+- A run creeping along a ledge a few units at a time no longer counts as moving
+  on: the no-progress limit needs 64 units along the route. One evaluation run had
+  sat on a ledge for 17 seconds.
+- The entropy bonus starts again at 0.005 and anneals to 0.002 over 2000
+  generations, so the policy explores new lines under the new reward.
+
+Result: to be measured.
 
 ## Where it stands
 

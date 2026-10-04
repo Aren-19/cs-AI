@@ -108,10 +108,14 @@ stock bool Rec_Human_Save(int client)
 	char path[PLATFORM_MAX_PATH];
 	Demo_Path(slot, path, sizeof(path));
 
+	Demo_MakeDataDir();
 	File f = OpenFile(path, "w");
 	if (f == null)
 	{
+		// The run stays in memory, so !csai_save can try again.
 		PrintToServer("[CsAI] record: could not open %s", path);
+		if (client > 0 && IsClientInGame(client))
+			PrintToChat(client, "[CsAI] could not save the run - see the server console, then !csai_save to try again");
 		return false;
 	}
 
