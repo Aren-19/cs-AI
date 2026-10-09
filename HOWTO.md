@@ -179,11 +179,15 @@ adds the map to `-Map` in `data/daemon_args.txt` and restarts training if it is
 running. Maps found in `download/maps` count as installed.
 `CsAI.bat forget surf_dune` takes it out again.
 
-The setup step on its own, without touching training:
+The setup step on its own, without adding the map to training:
 
 ```bash
-python tools/setup_map.py surf_dune --check
+python tools/setup_map.py surf_dune
 ```
+
+It builds the route, restart points, recorded wind-up and record run, then checks
+them. `--check` only checks a map that is already set up (it also refreshes the
+start zone and the reference time).
 
 One policy learns all the maps: each slot's servers are shared out between them,
 every batch says which map it came from, and evaluations take turns. The panel
@@ -203,12 +207,14 @@ Counting it would pay an enormous one-tick reward for being teleported.
 
 ## Recording runs
 
-More recordings are the most useful addition to the project.
+The route and the 24 restart points come from one run only: the timer's record
+for the map. To change them, set a new record and teach the map again.
 
-Recorded runs give the bot its route, its restart points and the recorded
-wind-ups it opens with until its own is good; the policy itself learns by
-practice. surf_demise has eight. Runs slightly off the usual line are the ones
-it has least of, and they give it restart points where recovering is needed.
+Runs recorded in game give the bot recorded wind-ups: the part of each run before
+the timer starts. The main slot opens a share of its runs with them, and falls back
+on one when its own wind-up fails. The first 16 usable runs are used (an opening of
+16 to 512 ticks). Everything after the start zone is not used in training, so a
+recording helps only through how it starts.
 
 ### Recording
 
@@ -232,17 +238,13 @@ otherwise leave the game unplayable.
 
 ### What kind of runs help
 
-Messy runs are worth more than clean ones. The bot already has a good line. What
-it lacks is what to do when it is too low, too fast, or drifting wide. A run that
-clips a ramp, wobbles and recovers teaches the recovery; another clean run does
-not.
+Different starts: jumping from different places in the zone, on either key, at
+different speeds. Five or six is enough. How the rest of the run goes does not
+matter.
 
-A useful mix is a few normal runs and a few that deliberately go wide, come in
-low, or scrape through a section and save it. Five or six is enough to start.
-
-A recording only helps if it stays near the route the bot is scored against.
-`python tools/setup_map.py <map> --check` lists any that stray far enough to count
-as a fall, which makes them poor sources for the route and restart points.
+`python tools/setup_map.py <map> --check` also shows how far each recording strays
+from the route. That matters for the timer's record, which is the route; for the
+other runs it only matters to a `bc.py` capture.
 
 ### Commands
 
@@ -254,13 +256,13 @@ In chat:
 | `!csai_save` | save the current run without finishing it |
 | `!csai_drop` | discard the current recording and restart it |
 
-`!csai_save` covers partial runs: to supply a specific hard section rather than
-the whole map, run into that section and save there.
+`!csai_save` keeps a run that was not finished; only its opening is used. A run
+that reached a section by teleport has no opening and is not used.
 
 ### Using new recordings
 
-After adding runs, teach the map again so the route, the restart points and the
-recorded wind-ups include them:
+The servers read the recordings when they start, so restart training (or teach
+the map again, which restarts it) to use new ones:
 
 ```bash
 CsAI.bat teach surf_demise

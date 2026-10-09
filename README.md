@@ -17,7 +17,7 @@ part of this should be pointed at a public server.
 
 | map | record to beat | bot, best so far | finishing |
 |---|---|---|---|
-| surf_demise | 38.23 s | 40.99 s median, 8 of 8 | 5 to 7 of 8 |
+| surf_demise | 38.23 s | 40.10 s median, 8 of 8 | 6 to 8 of 8 |
 | surf_utopia_njv | 54.66 s | does not finish yet | 0 of 8 |
 
 Times run from leaving the start zone to reaching the end zone, measured the same
@@ -27,10 +27,11 @@ The bot has to use its hands the way a person does (see below). With the old,
 instant view it finished all 8 runs of an evaluation on surf_demise (median
 40.08 s, fastest 39.84 s), but it strafed like a script.
 
-With hands it stalled about 3 seconds behind the record. It takes the record's
-line almost exactly but carries 4 to 6% less speed, lost a little at every ramp
-landing. It is now also rewarded for the speed it keeps, so a bad landing costs
-at the moment it happens (`docs/experiments.md`, "Why training stalled").
+With hands it stalled about 3 seconds behind the record. It took the record's
+line almost exactly but carried 4 to 6% less speed, lost a little at every ramp
+landing. Since it is also rewarded for the speed it keeps, so that a bad landing
+costs at the moment it happens, it has come to about 1.9 seconds behind
+(`docs/experiments.md`, "Why training stalled").
 
 `CsAI.bat status` shows the current numbers.
 
@@ -78,10 +79,10 @@ restarts it. The game servers are shared out between the maps, and every map is
 scored in turn. When the bot beats a record, the supervisor log says so and
 `CsAI.bat status` lists it.
 
-More recorded runs of the same map help. They do not need to be fast: a run that
-wobbles and recovers teaches more than another clean one.
-`python tools/setup_map.py <map> --check` shows which recordings stay close
-enough to the route to be useful.
+The route and the restart points come from the timer's record alone. Runs played
+on the map are recorded as well, and give the bot more ways to start: their
+openings, before the timer starts, are what it opens with until its own wind-up
+is good.
 
 ## How it works
 
@@ -173,7 +174,10 @@ Changeable at any time, even while training runs. Nothing learned is lost.
 | max | 11 | not recommended |
 
 Max is not faster. At 11 servers most of the practice is thrown away unread, and
-the servers take the processor time the learner needs. Measured on 12 logical
+the servers take the processor time the learner needs. The levels are for the
+whole machine: with both slots running, main takes its servers first and the
+wind-up slot gets what is left, so together they never ask for more cores than
+there are. Measured on 12 logical
 cores, 6 servers got through 44.3 million steps an hour and 11 got through 19.8
 million.
 

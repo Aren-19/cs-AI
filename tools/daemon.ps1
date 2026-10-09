@@ -93,13 +93,42 @@ $Levels = @{
     'low'    = @{ Timescale = 20;  Priority = 'BelowNormal'; Batch = 48; Actors = 2;  Desc = 'while using the PC' }
     'medium' = @{ Timescale = 80;  Priority = 'Normal';      Batch = 64; Actors = 4;  Desc = 'background work' }
     'high'   = @{ Timescale = 80;  Priority = 'Normal';      Batch = 64; Actors = 6;  Desc = 'about half the machine' }
-    'max'    = @{ Timescale = 80;  Priority = 'AboveNormal'; Batch = 96; Actors = 11; Desc = 'all of it' }
+    'max'    = @{ Timescale = 80;  Priority = 'AboveNormal'; Batch = 96; Actors = 11; Desc = 'all of it, not recommended' }
 }
 
 function Write-Log([string]$msg) {
     $line = "{0}  {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg
     Write-Host $line
     try { Add-Content -Path $LogFile -Value $line -Encoding utf8 } catch {}
+}
+
+function Get-SlotLevel([string]$s) {
+    $f = Join-Path $DataDir ("power{0}.txt" -f $(if ($s -eq 'main') { '' } else { "_$s" }))
+    if (Test-Path $f) {
+        $v = [string](Get-Content $f -Raw -ErrorAction SilentlyContinue)
+        $v = $v.Trim([char]0xFEFF + " `t`r`n").ToLower()
+        if ($Levels.ContainsKey($v)) { return $v }
+    }
+    return 'high'
+}
+
+# Servers this slot runs at a level. The levels are for the whole machine: with
+# several slots running, main takes its share first and the others take what is
+# left, so the slots together never ask for more cores than there are (one is
+# kept for the learners). A slot always runs at least one.
+function Get-ActorCount([string]$lvl) {
+    if ($ActorsOverride -gt 0) { return $ActorsOverride }
+    $slots = @(@(Get-Procs 'powershell.exe' '*daemon.ps1*' | Where-Object { $_.CommandLine -notlike '*-Stop*' } |
+                 ForEach-Object { Get-SlotOf $_.CommandLine }) + $Name | Select-Object -Unique |
+               Sort-Object { if ($_ -eq 'main') { '' } else { $_ } })
+    $room = [Environment]::ProcessorCount - 1
+    foreach ($s in $slots) {
+        $want = if ($s -eq $Name) { $Levels[$lvl].Actors } else { $Levels[(Get-SlotLevel $s)].Actors }
+        $n = [math]::Max(1, [math]::Min($want, $room))
+        if ($s -eq $Name) { return $n }
+        $room -= $n
+    }
+    return [math]::Max(1, [math]::Min($Levels[$lvl].Actors, $room))
 }
 
 function Get-Power {
@@ -250,7 +279,9 @@ function Invoke-Eval {
         if ($fp) { [void]$fp.WaitForExit(60000) }
     }
     $script:EvalLogLen = if (Test-Path $EvalLog) { (Get-Item $EvalLog).Length } else { 0 }
-    $ea = @('-Runs', '8', '-Map', $m, '-Greedy', '1', '-Port', $EvalPort,
+    # Above the training servers, so a busy machine cannot starve it past its time limit.
+    $evalPriority = if ($Levels[$appliedLevel].Priority -eq 'AboveNormal') { 'High' } else { 'AboveNormal' }
+    $ea = @('-Runs', '8', '-Map', $m, '-Greedy', '1', '-Port', $EvalPort, '-Priority', $evalPriority,
             '-FrameSkip', $FrameSkip, '-DevCost', $DevCost, '-Windup', $Windup,
             '-Partner', $Partner, '-MouseAcc', $MouseAcc, '-MouseMax', $MouseMax,
             '-MinPress', $MinPress, '-MinCoast', $MinCoast, '-MaxCoast', $MaxCoast,
@@ -303,7 +334,7 @@ if ($swept.Count -gt 0) { Write-Log "  cleared $($swept.Count) old batch file(s)
 Remove-Item (Join-Path $LogDir "learner$Sfx.err.log") -ErrorAction SilentlyContinue
 
 $ActorsOverride = $Actors
-if ($Actors -le 0) { $Actors = $Levels[$level].Actors }
+$Actors = Get-ActorCount $level
 
 Start-Learner
 Start-Sleep -Seconds 3
@@ -371,6 +402,11 @@ function Read-EvalResult {
         }
     }
     if ($runs -eq 0) { return $null }
+    # An eval killed by its time limit ran fewer runs than the others: not comparable.
+    if (-not ($block | Where-Object { $_ -match 'eval complete' })) {
+        Write-Log "  eval was cut short after $runs run(s) - not scored"
+        return $null
+    }
     $med = 999.0
     if ($times.Count) {
         $st = @($times | Sort-Object)
@@ -476,9 +512,11 @@ while ($true) {
 
     # Power change: restart the servers with the new settings. The learner keeps going.
     $want = Get-Power
-    if ($want -ne $appliedLevel) {
-        Write-Log "power changed: $appliedLevel -> $want ($($Levels[$want].Desc))"
-        $newCount = if ($ActorsOverride -gt 0) { $ActorsOverride } else { $Levels[$want].Actors }
+    $wantCount = Get-ActorCount $want
+    if ($want -ne $appliedLevel -or $wantCount -ne $Actors) {
+        if ($want -ne $appliedLevel) { Write-Log "power changed: $appliedLevel -> $want ($($Levels[$want].Desc))" }
+        else { Write-Log "another slot started or stopped: $Actors -> $wantCount server(s)" }
+        $newCount = $wantCount
         foreach ($k in @($ActorPids.Keys)) {
             if (Test-MyActor $ActorPids[$k] $k) { Stop-Process -Id $ActorPids[$k] -Force -ErrorAction SilentlyContinue }
             if ($k -ge $newCount) { $ActorPids.Remove($k) }

@@ -1,6 +1,7 @@
 """PPO learner. Consumes trajectory batches, publishes weights each generation."""
 
 import argparse
+import collections
 import os
 import shutil
 import sys
@@ -242,6 +243,9 @@ def main():
     processed = set()
     consumed = 0
     t_start = time.time()
+    # Servers that sent batches lately. Each one's batch spans about as many
+    # generations as there are servers, so what counts as stale grows with them.
+    recent_actors = collections.deque(maxlen=64)
 
     while consumed < args.batches:
         found = find_next_batch(args.outdir, processed)
@@ -255,6 +259,7 @@ def main():
                 print("no batch within %.0fs, stopping" % args.timeout)
                 break
         stem, batch_key = found
+        recent_actors.append(stem.split("_")[0])
 
         binp = os.path.join(args.outdir, stem + ".bin")
         donep = os.path.join(args.outdir, stem + ".done")
@@ -295,8 +300,9 @@ def main():
 
         # Too far behind the current policy to be worth an update.
         batch_gen = int(info.get("gen", gen))
-        if args.max_lag > 0 and gen - batch_gen > args.max_lag:
-            print("skip %s: policy gen %d is %d behind" % (stem, batch_gen, gen - batch_gen))
+        lag_limit = max(args.max_lag, 2 * len(set(recent_actors)) + 2) if args.max_lag > 0 else 0
+        if lag_limit > 0 and gen - batch_gen > lag_limit:
+            print("skip %s: policy gen %d is %d behind (limit %d)" % (stem, batch_gen, gen - batch_gen, lag_limit))
             processed.add(batch_key)
             if not args.keep:
                 for pth in (binp, donep):

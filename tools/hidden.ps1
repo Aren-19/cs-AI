@@ -100,7 +100,7 @@ function Start-HiddenPowerShell([string]$Script, [object[]]$ArgList = @(), [stri
 $SrcdsLogDir = Join-Path $GameRoot 'cstrike\logs'
 
 # Every server is LAN only and insecure, so it can never reach VAC.
-function Start-Srcds([string]$LogName, [int]$Port, [object[]]$ArgList) {
+function Start-Srcds([string]$LogName, [int]$Port, [object[]]$ArgList, [string]$Priority = '') {
     New-Item -ItemType Directory -Force -Path $SrcdsLogDir | Out-Null
     $a = @('-console', '-game', 'cstrike', '-maxplayers', '6',
            '+sv_lan', '1', '-insecure', '-port', $Port,
@@ -119,6 +119,7 @@ function Start-Srcds([string]$LogName, [int]$Port, [object[]]$ArgList) {
             Remove-Item (Join-Path $SrcdsLogDir "$LogName.log") -ErrorAction SilentlyContinue
             $p = Start-Hidden (Join-Path $GameRoot 'srcds_win64.exe') $a $GameRoot
             if (-not $p) { return $null }
+            if ($Priority) { try { $p.PriorityClass = $Priority } catch {} }
             $log = ''
             for ($i = 0; $i -lt 160 -and -not $p.HasExited; $i++) {
                 Start-Sleep -Milliseconds 250
@@ -144,8 +145,8 @@ function Get-SrcdsLog([string]$LogName) {
 }
 
 # One server run to completion; returns its console output.
-function Invoke-Srcds([string]$LogName, [int]$Port, [object[]]$ArgList, [int]$TimeoutSec = 600) {
-    $p = Start-Srcds $LogName $Port $ArgList
+function Invoke-Srcds([string]$LogName, [int]$Port, [object[]]$ArgList, [int]$TimeoutSec = 600, [string]$Priority = '') {
+    $p = Start-Srcds $LogName $Port $ArgList $Priority
     if ($p -and -not $p.WaitForExit($TimeoutSec * 1000)) {
         Write-Host '    timed out, killing' -ForegroundColor Yellow
         try { $p.Kill() } catch {}

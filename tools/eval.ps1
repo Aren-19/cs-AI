@@ -22,7 +22,8 @@ param(
     [int]$MinCoast   = 6,
     [int]$MaxCoast   = 16,
     [int]$SwitchGap  = 2,
-    [string]$Weights = ''       # a frozen weights file in the server's data/csai; blank = the live one
+    [string]$Weights = '',      # a frozen weights file in the server's data/csai; blank = the live one
+    [string]$Priority = ''      # process priority for the server, e.g. AboveNormal
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,7 +59,7 @@ if ($Partner) { $a += @('+csai_partner', $Partner) }
 
 $mode = if ($Greedy -ne 0) { 'greedy' } else { 'sampled' }
 Write-Host "==> eval $Map ($name): $Runs $mode runs, frameskip $FrameSkip" -ForegroundColor Cyan
-$log = Invoke-Srcds "csai_${name}_eval" $Port $a $TimeoutSec
+$log = Invoke-Srcds "csai_${name}_eval" $Port $a $TimeoutSec $Priority
 
 $lines = @($log -split "`r?`n" | Where-Object { $_ -match 'eval|replay:|wind-up:' })
 $lines | ForEach-Object { Write-Host $_ }

@@ -3,7 +3,9 @@
 What was changed, and whether it helped. Failures are kept because most of the
 useful information is in them.
 
-Target: `surf_demise`, 66 tick. Reference run 39.045 s.
+Target: `surf_demise`, 66 tick. Reference run 39.045 s under the original timer,
+which started on the jump; timed from leaving the start zone, as now, the record is
+38.23 s.
 
 ## Observation and action space
 
@@ -506,6 +508,13 @@ by three separate reviews before it counted. What it found and what changed:
   20 to 40 times too high. The human column of the human-likeness check included
   the moments after the finish, and a 100-tick record was compared in its own
   ticks.
+- **Load.** Each slot read its power level as if it had the machine to itself, so
+  both at max ran 22 servers on 12 cores and the evaluation server, at a lower
+  priority, took ten minutes instead of thirty seconds and was cut off. The levels
+  now share one budget across slots, the evaluation runs above the training
+  servers, and an evaluation cut short is not scored. With 11 servers the learner
+  threw away its slowest batches as stale, which were mostly the best surf_demise
+  ones; the limit now grows with the number of servers.
 
 ## Why training stalled
 
