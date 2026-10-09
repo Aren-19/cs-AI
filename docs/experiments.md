@@ -534,7 +534,25 @@ over the following seconds, too spread out to learn from. Changes:
 - The entropy bonus starts again at 0.005 and anneals to 0.002 over 2000
   generations, so the policy explores new lines under the new reward.
 
-Result: to be measured.
+Result after four days of training (gens 28170 to 31704): surf_demise
+evaluations went from about 41.1 s to 40.1-40.4 s, with a best median of
+40.10 s from 8 of 8 and 39.90 s from 6 of 8. surf_utopia_njv still finished none.
+
+Two faults turned up in the next bug hunt:
+
+- The speed reward charged a whole crash to one decision: hitting the wall under
+  the surf_demise end platform at 4675 u/s cost about -270, more than a finish
+  pays, while leaving the route cost -1. In the batches, 256 of 611 episodes had
+  one decision below -20, and those few steps set the scale of every advantage.
+  One decision now earns or loses at most 5 from it, which still covers a hard
+  landing (2 to 5).
+- surf_utopia_njv restart point 18 (78%) was taken on a tick where the record
+  snaps 9 units against the ramp, so it stored a downward speed of 604 u/s where
+  the record was moving at about 50. Every run started there was thrown into the
+  ramp and fell within 25 decisions, and focused starts picked it for every
+  failure near the 77% wall, so the stretch the bot most needed to practise was
+  never practised from a state it could survive. Restart points now move on to a
+  tick where the motion into and out of it agree. Point 22 (96%) moved too.
 
 ## Where it stands
 

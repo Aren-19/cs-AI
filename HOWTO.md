@@ -139,7 +139,9 @@ The start zone air allows a faster mouse change (2.5), as the recorded runs
 show. The run is also paid for the speed it keeps (`-EnergyScale`, default
 40000: that much of half the speed squared plus gravity times height earns 1, so
 dropping down a ramp neither earns nor costs, and a hard landing or a scrape
-costs at once). 0 turns it off. The policy only sees the actions these limits allow, and the learner
+costs at once). 0 turns it off. One decision earns or loses at most
+`-EnergyClamp` (5) from it, so hitting a wall at full speed does not outweigh a
+finish. The policy only sees the actions these limits allow, and the learner
 knows which those were.
 
 `python tools/humanlike.py <replay>` puts a run next to the record on the same

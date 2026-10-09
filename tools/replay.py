@@ -251,6 +251,18 @@ def checkpoints(frames, count=24, tickrate=100.0):
                 prev, cur, i = cur, frames[i + 1], i + 1
             else:
                 continue
+        # A record snaps by a few units against a ramp now and then, which shows
+        # as a velocity jump of hundreds of u/s for one tick. A state taken there
+        # throws the bot into the ramp, so move on to a tick where the motion
+        # into it and out of it agree.
+        for _ in range(8):
+            if i + 1 >= n or _dist(cur.pos, frames[i + 1].pos) > teleport_threshold(tickrate):
+                break
+            back = [(cur.pos[j] - prev.pos[j]) / dt for j in range(3)]
+            fwd = [(frames[i + 1].pos[j] - cur.pos[j]) / dt for j in range(3)]
+            if abs(back[2] - fwd[2]) <= 100.0 and max(abs(back[0] - fwd[0]), abs(back[1] - fwd[1])) <= 250.0:
+                break
+            prev, cur, i = cur, frames[i + 1], i + 1
         vel = tuple((cur.pos[j] - prev.pos[j]) / dt for j in range(3))
         out.append({
             "index": i,

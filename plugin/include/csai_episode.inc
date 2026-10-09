@@ -88,7 +88,9 @@ float g_fTimePower     =  8.0;    // how sharply the payout falls off with time
 float g_fTrimCost      = 0.05;    // per change of trim between decisions
 float g_fStartMaxFrac  = 0.90;     // never start so near the end that the run finishes at once
 float g_fEnergyScale   = 40000.0;  // speed kept, 0.5 v^2 + g z, that earns 1; 0 = not rewarded
+float g_fEnergyClamp   = 5.0;      // the most one decision's kept speed can earn or cost
 float g_fEpLastE       = 0.0;
+float g_fEpStepEnergy  = 0.0;      // this decision's kept speed, before the clamp
 bool  g_bEpEnergySet   = false;
 float g_fEpProgMark    = 0.0;      // route point the no-progress count last restarted from
 ConVar g_cvGravity     = null;
@@ -365,12 +367,20 @@ stock void Ep_PushStep()
 	row[5] = g_fEpPendVel[2];
 	row[6] = float(g_iEpAction);
 	row[7] = g_fEpLogp;
-	row[8] = g_fEpStepReward;
+	// A hard landing costs a few points; hitting a wall at full speed would cost
+	// hundreds in one decision and drown everything else, so it is capped.
+	float energy = g_fEpStepEnergy;
+	if (g_fEnergyClamp > 0.0)
+	{
+		if (energy >  g_fEnergyClamp) energy =  g_fEnergyClamp;
+		if (energy < -g_fEnergyClamp) energy = -g_fEnergyClamp;
+	}
+	row[8] = g_fEpStepReward + energy;
 	for (int i = 0; i < OBS_DIM; i++)
 		row[9 + i] = g_fEpPendObs[i];
 	row[9 + OBS_DIM] = view_as<float>(g_iEpPendMask);
 	g_hEpBuf.PushArray(row, EP_REC_FLOATS);
-	g_fEpReturn += g_fEpStepReward;
+	g_fEpReturn += row[8];
 }
 
 /** Remembers the decision in flight so it can be written once its reward is known. */
@@ -616,6 +626,7 @@ stock int Ep_WindupTick(int client, const float pos[3], const float vel[3],
 			if (g_iEpSteps > 0)
 				Ep_PushStep();
 			g_fEpStepReward = 0.0;
+			g_fEpStepEnergy = 0.0;
 		}
 
 		float obs[OBS_DIM];
@@ -1015,6 +1026,7 @@ stock void Ep_Reset()
 	g_bEpFollow     = false;
 	g_iEpTakeoff    = TAKEOFF_NONE;
 	g_fEpStepReward = 0.0;
+	g_fEpStepEnergy = 0.0;
 	g_bWindupJumped = false;
 	g_iWindupAirTicks = 0;
 
@@ -1204,7 +1216,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 		{
 			float e = 0.5 * GetVectorDotProduct(vel, vel) + Ep_Gravity() * pos[2];
 			if (g_bEpEnergySet && g_bEpClockOn && !teleported)
-				g_fEpStepReward += (e - g_fEpLastE) / g_fEnergyScale;
+				g_fEpStepEnergy += (e - g_fEpLastE) / g_fEnergyScale;
 			g_fEpLastE = e;
 			g_bEpEnergySet = true;
 		}
@@ -1257,6 +1269,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 			if (g_iEpSteps > 0)
 				Ep_PushStep();             // bank the previous decision
 			g_fEpStepReward = 0.0;         // open this decision's accumulator
+			g_fEpStepEnergy = 0.0;
 		}
 
 		float obs[OBS_DIM];

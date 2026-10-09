@@ -31,6 +31,7 @@ param(
     [int]$MaxCoast = 16,           # ticks with no key before a press is required
     [int]$SwitchGap = 2,           # ticks the new key may lag a change of side
     [double]$EnergyScale = 40000,  # speed kept (0.5 v^2 + g z) that earns 1; 0 = not rewarded
+    [double]$EnergyClamp = 5,      # the most one decision's kept speed can earn or cost
     [int]$StallSeconds = 240,      # no new generation for this long counts as a stall
     [int]$SilentSeconds = 600,     # a server quiet this long while others work is restarted
     [int]$EvalEvery = 40,          # generations between evaluations
@@ -202,7 +203,7 @@ function Start-Actor([string]$level, [int]$id) {
         '+csai_windup', $Windup, '+csai_learnedmix', $LearnedMix, '+csai_linejitter', $LineJitter,
         '+csai_mouseacc', $MouseAcc, '+csai_mousemax', $MouseMax,
         '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast, '+csai_maxcoast', $MaxCoast,
-        '+csai_switchgap', $SwitchGap, '+csai_energyscale', $EnergyScale,
+        '+csai_switchgap', $SwitchGap, '+csai_energyscale', $EnergyScale, '+csai_energyclamp', $EnergyClamp,
         '+csai_bench_timescale', $cfg.Timescale,
         '+csai_bench_quit', '0', '+csai_bench_delay', '8'
     )
