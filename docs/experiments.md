@@ -491,6 +491,21 @@ by three separate reviews before it counted. What it found and what changed:
   with capitals lost its start and end zones. Maps under `cstrike/custom` were
   reported as not installed. A failed `teach` no longer leaves half-written route
   files behind.
+- **Finding its own processes.** A learner's slot was read from the first
+  `out_` anywhere on its command line, so a map like surf_lockout or a folder
+  like checkout_x made a supervisor lose its learner and start another one every
+  15 seconds; only the batch folder's name counts now. A changed power level could
+  kill a process that had taken a dead server's id, and the launcher could end up
+  watching an unrelated process with a reused id. `teach` and `forget` restarted
+  slots that had been stopped, and `start` would not start a stopped slot while
+  another ran.
+- **Tools.** The PowerShell side read the game folder file and Steam's library
+  list in a different text encoding from the Python side, so a folder name with
+  letters like u-umlaut could send them to different installs. The summary
+  counted rows from before maps were logged under every map, and gave throughput
+  20 to 40 times too high. The human column of the human-likeness check included
+  the moments after the finish, and a 100-tick record was compared in its own
+  ticks.
 
 ## Why training stalled
 

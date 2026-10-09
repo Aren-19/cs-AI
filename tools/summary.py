@@ -31,6 +31,14 @@ def spark(values, width=48):
         out.append(BLOCKS[min(int(t * (len(BLOCKS) - 1)), len(BLOCKS) - 1)])
     return "".join(out)
 
+def map_rows(rows, mapname):
+    """One map's rows. Rows from before the log named the map belong to the one
+    map trained then; once other maps share the log, which map that was cannot be
+    told, so they are left out."""
+    named = {r.get("map") for r in rows if r.get("map")}
+    legacy = named <= {mapname}
+    return [r for r in rows if r.get("map") == mapname or (legacy and not r.get("map"))]
+
 def main():
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.abspath(__file__))
@@ -72,12 +80,15 @@ def main():
         return 1
 
     with open(args.log) as fh:
-        rows = list(csv.DictReader(fh))
-    rows = [r for r in rows if r.get("map") in (None, "", mapname)]
+        all_rows = list(csv.DictReader(fh))
+    rows = map_rows(all_rows, mapname)
+    unnamed = sum(1 for r in all_rows if not r.get("map"))
     if not rows:
         print("no generations for %s in the log" % mapname)
         return 1
     print("map         : %s" % mapname)
+    if unnamed and len(rows) < len(all_rows) and not any(not r.get("map") for r in rows):
+        print("              (%d older rows name no map and are left out)" % unnamed)
 
     def col(name, cast=float):
         return [cast(r[name]) for r in rows]
@@ -95,9 +106,14 @@ def main():
     print("generations : %d  (gen %d .. %d)" % (len(rows), gen[0], gen[-1]))
     print("episodes    : %d" % sum(eps))
     print("agent steps : %d" % total_steps)
-    if wall[-1] > 0:
-        print("wall        : %.1f s  (%.0f steps/s end-to-end incl. learner)"
-              % (wall[-1], total_steps / wall[-1]))
+    # Each learner process counts its own wall time from zero, and every map's
+    # rows share it, so the time trained is the sum of the steps up, over all rows.
+    wall_all = [float(r["wall"]) for r in all_rows]
+    spent = sum(b - a for a, b in zip(wall_all, wall_all[1:]) if b > a)
+    steps_all = sum(int(r["steps"]) for r in all_rows)
+    if spent > 0:
+        print("wall        : %.1f h trained, all maps  (%.0f steps/s end-to-end incl. learner)"
+              % (spent / 3600.0, steps_all / spent))
     print()
 
     def line(name, vals, fmt="%.4f", scale=1.0):

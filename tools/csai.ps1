@@ -58,8 +58,18 @@ function Get-Supervisors {
       Where-Object { $_.CommandLine -like '*daemon.ps1*' -and $_.CommandLine -notlike '*-Stop*' })
 }
 
-function Start-Training {
+function Get-RunningSlots {
+    @(Get-Supervisors | ForEach-Object {
+        if ($_.CommandLine -match '(^|\s)-Slot\s+(\S+)') { $Matches[2] } else { 'main' }
+    } | Select-Object -Unique)
+}
+
+# Starts every slot (or only those named) that has no supervisor yet.
+function Start-Training([string[]]$Only = @()) {
+    $running = @(Get-RunningSlots)
     foreach ($slot in (Get-Slots)) {
+        if ($Only.Count -gt 0 -and $Only -notcontains $slot) { continue }
+        if ($running -contains $slot) { Write-Host "  $slot is already running"; continue }
         $sa = @(Read-SlotArgs $slot)
         if ($slot -ne 'main' -and -not ($sa -contains '-Slot')) { $sa += @('-Slot', $slot) }
         [void](Start-HiddenPowerShell $Daemon $sa $Root)
@@ -68,9 +78,10 @@ function Start-Training {
     }
 }
 
-function Stop-Training {
+function Stop-Training([string[]]$Only = @()) {
     $procs = @()
     foreach ($slot in (Get-Slots)) {
+        if ($Only.Count -gt 0 -and $Only -notcontains $slot) { continue }
         $a = @('-Stop')
         if ($slot -ne 'main') { $a += @('-Slot', $slot) }
         $procs += Start-HiddenPowerShell $Daemon $a $Root
@@ -157,10 +168,11 @@ switch ($Command.ToLower()) {
             Set-Maps 'main' ($maps + $MapName)
             Write-Host "added $MapName to training ($((@($maps) + $MapName) -join ', '))"
         }
-        if (@(Get-Supervisors).Count -gt 0) {
+        $running = @(Get-RunningSlots)
+        if ($running.Count -gt 0) {
             Write-Host 'restarting training so the servers pick it up'
-            Stop-Training
-            Start-Training
+            Stop-Training $running
+            Start-Training $running
         } else {
             Write-Host 'training is stopped - start it from the panel or with: CsAI.bat start'
         }
@@ -181,10 +193,11 @@ switch ($Command.ToLower()) {
         }
         Set-Maps 'main' $maps
         Write-Host "training on: $($maps -join ', ')"
-        if (@(Get-Supervisors).Count -gt 0) { Stop-Training; Start-Training }
+        $running = @(Get-RunningSlots)
+        if ($running.Count -gt 0) { Stop-Training $running; Start-Training $running }
     }
     'status' { Show-Status }
-    'start'  { if (@(Get-Supervisors).Count -gt 0) { Write-Host 'already running' } else { Start-Training } }
+    'start'  { Start-Training }
     'stop'   { Stop-Training }
     default {
         Write-Host 'CsAI.bat                  open the panel'

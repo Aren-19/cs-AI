@@ -1,12 +1,22 @@
 # Where Counter-Strike: Source is installed, the same way tools/game.py finds it:
 # CSAI_GAME, then data/game.txt, then the Steam libraries, then Steam's default folder.
 
+# Text as game.py reads it: UTF-16 by its byte order mark (what PowerShell's '>'
+# writes), otherwise UTF-8, and the ANSI code page only if that fails.
+function Read-Text([string]$path) {
+    $b = [IO.File]::ReadAllBytes($path)
+    if ($b.Length -ge 2 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) { return [Text.Encoding]::Unicode.GetString($b, 2, $b.Length - 2) }
+    if ($b.Length -ge 2 -and $b[0] -eq 0xFE -and $b[1] -eq 0xFF) { return [Text.Encoding]::BigEndianUnicode.GetString($b, 2, $b.Length - 2) }
+    try { return (New-Object Text.UTF8Encoding($false, $true)).GetString($b) }
+    catch { return [Text.Encoding]::Default.GetString($b) }
+}
+
 function Find-Game {
     $ok = { param($p) $p -and (Test-Path (Join-Path $p 'cstrike')) }
     if (& $ok $env:CSAI_GAME) { return $env:CSAI_GAME }
     $named = Join-Path (Split-Path -Parent $PSScriptRoot) 'data\game.txt'
     if (Test-Path $named) {
-        $p = ([string](Get-Content $named -Raw)).Trim([char]0xFEFF + " `t`r`n`"")
+        $p = ([string](Read-Text $named)).Trim([char]0xFEFF + " `t`r`n`"")
         if (& $ok $p) { return $p }
     }
     $steams = @()
@@ -20,7 +30,7 @@ function Find-Game {
         $libs = @($s)
         $vdf = Join-Path $s 'steamapps\libraryfolders.vdf'
         if (Test-Path $vdf) {
-            foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) {
+            foreach ($m in [regex]::Matches((Read-Text $vdf), '"path"\s+"([^"]+)"')) {
                 $libs += ($m.Groups[1].Value -replace '\\\\', '\')
             }
         }

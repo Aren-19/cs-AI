@@ -142,7 +142,8 @@ def eval_runs(limit_bytes=4000000):
 
 def build(log_path, out_dir):
     # Generations from other maps trained alongside are left out: this is about MAP.
-    rows = [r for r in load(log_path) if r.get("map") in (None, "", MAP)]
+    from summary import map_rows
+    rows = map_rows(load(log_path), MAP)
     now = datetime.datetime.now()
     L = []
     A = L.append

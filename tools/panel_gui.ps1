@@ -23,10 +23,18 @@ function Get-RealSlots {
     return $out
 }
 
+# Which slot a process belongs to, from its command line. Servers, evals and
+# supervisors name it (-Slot / +csai_slot; none means main). A learner shows it
+# only in the folder it reads batches from, out or out_<slot>, so nothing else on
+# its command line (a map name, a path) can be mistaken for it.
 function Get-SlotOf([string]$cl) {
     if ($cl -match '\+csai_slot\s+(\S+)') { return $Matches[1] }
-    if ($cl -match '-Slot\s+(\S+)') { return $Matches[1] }
-    if ($cl -match 'out_([A-Za-z0-9]+)') { return $Matches[1] }
+    if ($cl -match '(^|\s)-Slot\s+(\S+)') { return $Matches[2] }
+    if ($cl -match '--outdir\s+(?:"([^"]+)"|(\S+))') {
+        $dir = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+        $leaf = Split-Path -Leaf ($dir.TrimEnd('\', '/'))
+        if ($leaf -match '^out_(.+)$') { return $Matches[1] }
+    }
     return 'main'
 }
 

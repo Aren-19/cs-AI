@@ -27,6 +27,7 @@ public static class Hidden {
     static extern bool CloseHandle(IntPtr h);
 
     const string DesktopName = "CsAI";
+    static System.Collections.Generic.Dictionary<int, IntPtr> held = new System.Collections.Generic.Dictionary<int, IntPtr>();
     const uint CREATE_NO_WINDOW = 0x08000000;
     const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
     static IntPtr desktop = IntPtr.Zero;
@@ -48,8 +49,19 @@ public static class Hidden {
                            CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, IntPtr.Zero, cwd, ref si, out pi))
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
+        // Held until the caller has its own handle: while any handle is open,
+        // Windows cannot give this process id to another process.
+        lock (held) held[pi.dwProcessId] = pi.hProcess;
         return pi.dwProcessId;
+    }
+
+    public static void Release(int pid) {
+        IntPtr h;
+        lock (held) {
+            if (!held.TryGetValue(pid, out h)) return;
+            held.Remove(pid);
+        }
+        CloseHandle(h);
     }
 }
 }
@@ -71,7 +83,12 @@ function Start-Hidden([string]$FilePath, [object[]]$ArgList = @(), [string]$Work
         $FilePath = $cmd.Source
     }
     $procId = [CsAI.Hidden]::Start($FilePath, (Join-Args $ArgList), $WorkingDirectory)
-    return (Get-Process -Id $procId -ErrorAction SilentlyContinue)
+    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    # Reading .Handle makes the object keep its own handle, so HasExited and
+    # WaitForExit always watch this process, never a later one with the same id.
+    if ($p) { try { [void]$p.Handle } catch {} }
+    if ([CsAI.Hidden].GetMethod('Release')) { [CsAI.Hidden]::Release($procId) }
+    return $p
 }
 
 function Start-HiddenPowerShell([string]$Script, [object[]]$ArgList = @(), [string]$WorkingDirectory = $PWD.Path) {

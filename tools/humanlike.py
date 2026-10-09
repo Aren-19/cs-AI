@@ -23,6 +23,7 @@ SMDATA  = os.path.join(CSTRIKE, r"addons\sourcemod\data")
 
 IN_JUMP, IN_FORWARD, IN_MOVELEFT, IN_MOVERIGHT = 2, 8, 512, 1024
 FL_ONGROUND = 1
+SERVER_TICK = 66.67      # the bot runs at this; a record from another tickrate is converted
 
 # What the recorded human runs stay within, with a little room. Turn speed in
 # degrees per tick, its change in degrees per tick per tick.
@@ -86,6 +87,10 @@ def measure(path, mapname):
     flg = np.array([f.flags for f in fr], dtype=np.int64)
     pre = int(r.preframes)
     n = len(fr)
+    # The timer keeps a moment after the finish; that is not part of the run.
+    end = min(n, pre + int(r.frame_count)) if r.frame_count > 0 else n
+    # Per-tick numbers in the bot's ticks: a 100-tick record turns less per tick.
+    k = (r.tickrate / SERVER_TICK) if r.tickrate and r.tickrate > 0 else 1.0
     # Some records started their timer on the jump, inside the zone. The run is
     # measured from leaving the zone, as the bot's is, so move the split there.
     z = zone(mapname)
@@ -93,7 +98,7 @@ def measure(path, mapname):
         mn, mx = z
         inside = ((pos[:, 0] >= mn[0]) & (pos[:, 0] <= mx[0]) & (pos[:, 1] >= mn[1]) & (pos[:, 1] <= mx[1]) &
                   (pos[:, 2] < mx[2] - 31) & (pos[:, 2] + 72 > mn[2] + 31))
-        exit_tick = next((i for i in range(pre, n) if not inside[i]), None)
+        exit_tick = next((i for i in range(pre, end) if not inside[i]), None)
         if exit_tick is not None and exit_tick - pre > 2:
             pre = exit_tick
 
@@ -105,19 +110,19 @@ def measure(path, mapname):
     ground = (flg & FL_ONGROUND) != 0
 
     run = np.zeros(n, bool)
-    run[pre + 2:] = True
+    run[pre + 2:end] = True
     air = run & ok & ~ground
     out = {"file": os.path.basename(path), "ticks": n, "prestrafe": pre}
     if air.sum() > 20:
-        out["air_turn_p99"] = float(np.percentile(np.abs(turn[air]), 99))
-        out["air_accel_p99"] = float(np.percentile(np.abs(accel[air]), 99))
+        out["air_turn_p99"] = float(np.percentile(np.abs(turn[air]), 99)) * k
+        out["air_accel_p99"] = float(np.percentile(np.abs(accel[air]), 99)) * k * k
         b = btn[air]
         out["no_key"] = float(np.mean(((b & IN_MOVELEFT) == 0) & ((b & IN_MOVERIGHT) == 0)))
-    h = key_holds(btn[pre:])
-    if len(h) and n - pre > 66:          # a run of a second or more
+    h = key_holds(btn[pre:end]) / k
+    if len(h) and (end - pre) / k > 66:   # a run of a second or more
         out["hold_median"] = float(np.median(h))
         out["short_holds"] = float(np.mean(h <= 2))
-        secs = (n - pre) * (r.tickrate and 1.0 / r.tickrate or 0.015)
+        secs = (end - pre) * (r.tickrate and 1.0 / r.tickrate or 0.015)
         out["switches_per_s"] = float(len(h) / max(secs, 1e-6))
 
     # The wind-up: everything before the timer.
@@ -125,13 +130,13 @@ def measure(path, mapname):
         wg = ground[:pre] & ok[:pre]
         wg[:2] = False
         if wg.any():
-            out["ground_turn_max"] = float(np.abs(turn[:pre][wg]).max())
+            out["ground_turn_max"] = float(np.abs(turn[:pre][wg]).max()) * k
         jumped = np.where((btn[:pre] & IN_JUMP) & ground[:pre])[0]
         # the last take-off before the timer starts
         lift = np.where(ground[:pre - 1] & ~ground[1:pre])[0]
         if len(lift):
             j = int(lift[-1]) + 1
-            out["zone_air_ticks"] = pre - j
+            out["zone_air_ticks"] = int(round((pre - j) / k))
             if z is not None:
                 mn, mx = z
                 p = pos[j - 1]

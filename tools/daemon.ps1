@@ -126,14 +126,22 @@ function Test-MyActor([int]$apid, [int]$i) {
     return ($p.Count -gt 0 -and $p[0].CommandLine -match "\+csai_actor\s+$i(\s|$)" -and (Test-Mine $p[0].CommandLine))
 }
 
-function Test-Mine([string]$cl) {
-    # Which slot a process belongs to, from its command line.
-    $theirs = 'main'
-    if ($cl -match '\+csai_slot\s+(\S+)') { $theirs = $Matches[1] }
-    elseif ($cl -match '-Slot\s+(\S+)') { $theirs = $Matches[1] }
-    elseif ($cl -match 'out_([A-Za-z0-9]+)') { $theirs = $Matches[1] }
-    return ($theirs -eq $Name)
+# Which slot a process belongs to, from its command line. Servers, evals and
+# supervisors name it (-Slot / +csai_slot; none means main). A learner shows it
+# only in the folder it reads batches from, out or out_<slot>, so nothing else on
+# its command line (a map name, a path) can be mistaken for it.
+function Get-SlotOf([string]$cl) {
+    if ($cl -match '\+csai_slot\s+(\S+)') { return $Matches[1] }
+    if ($cl -match '(^|\s)-Slot\s+(\S+)') { return $Matches[2] }
+    if ($cl -match '--outdir\s+(?:"([^"]+)"|(\S+))') {
+        $dir = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+        $leaf = Split-Path -Leaf ($dir.TrimEnd('\', '/'))
+        if ($leaf -match '^out_(.+)$') { return $Matches[1] }
+    }
+    return 'main'
 }
+
+function Test-Mine([string]$cl) { return ((Get-SlotOf $cl) -eq $Name) }
 
 function Get-MyLearners { @(Get-Procs 'python.exe' '*learn.py*' | Where-Object { Test-Mine $_.CommandLine }) }
 function Get-MySupervisors {
@@ -174,6 +182,7 @@ function Start-Learner {
             '--ckpt', $Ckpt, '--log', $TrainLog, '--out', $LearnLog)
     if ($EntFinal -gt 0.0) { $la += @('--ent-final', $EntFinal, '--ent-anneal', $EntAnneal) }
     $la += @('--kl-ref', $KlRef)
+    if ($KlRef -gt 0) { $la += @('--ref-ckpt', (Join-Path $DataDir "ckpt_anchor$Sfx.npz")) }
     if (Test-Path $Ckpt) { $la += '--resume' }
     $lp = Start-Hidden 'python.exe' $la (Join-Path $Root 'tools')
     if ($lp) { try { $lp.PriorityClass = 'AboveNormal' } catch {} }
@@ -471,7 +480,7 @@ while ($true) {
         Write-Log "power changed: $appliedLevel -> $want ($($Levels[$want].Desc))"
         $newCount = if ($ActorsOverride -gt 0) { $ActorsOverride } else { $Levels[$want].Actors }
         foreach ($k in @($ActorPids.Keys)) {
-            Stop-Process -Id $ActorPids[$k] -Force -ErrorAction SilentlyContinue
+            if (Test-MyActor $ActorPids[$k] $k) { Stop-Process -Id $ActorPids[$k] -Force -ErrorAction SilentlyContinue }
             if ($k -ge $newCount) { $ActorPids.Remove($k) }
         }
         $Actors = $newCount
