@@ -123,8 +123,7 @@ wind-up when there is one.
 
 ### Hands
 
-Both policies act through the same limits, set per slot in the daemon
-arguments:
+The run acts through these limits, set per slot in the daemon arguments:
 
 | setting | default | what it limits |
 |---|---|---|
@@ -135,8 +134,16 @@ arguments:
 | `-MaxCoast` | 16 | ticks with no key before a press is required |
 | `-SwitchGap` | 2 | ticks the new key may lag a change of side in the run |
 
-The start zone air allows a faster mouse change (2.5), as the recorded runs
-show. The run is also paid for the speed it keeps (`-EnergyScale`, default
+The wind-up has hands of its own. It keeps a chosen side 12 ticks, may lift and
+press again at any decision in the zone air but is hands-off there at most
+`-MaxCoast` ticks, and on a reversal its new key waits at most `-MinCoast` ticks
+while the mouse still turns the old way. Its mouse eases at 1.0 deg/tick^2 on the
+ground (at most 3.5 deg/tick) and 2.5 in the zone air (at most `-MouseMax`).
+`-MinPress`, `-SwitchGap` and `-MouseAcc` do not apply to it.
+
+The wind-up slot flies the frozen main policy after the zone under its own hand
+settings, so `data/daemon_args_windup.txt` should give the same ones as the main
+slot's arguments. The run is also paid for the speed it keeps (`-EnergyScale`, default
 40000: that much of half the speed squared plus gravity times height earns 1, so
 dropping down a ramp neither earns nor costs, and a hard landing or a scrape
 costs at once). 0 turns it off. One decision earns or loses at most
@@ -195,8 +202,9 @@ and `CsAI.bat status` show each map on its own line, and the best result is kept
 per map. When an evaluation beats the record, the supervisor log says
 `RECORD BEATEN` and the time goes into `data/records.txt`.
 
-The wind-up slot trains on surf_demise only for now, so on other maps the
-learned wind-up is one it has not practised there.
+The wind-up slot trains on the same maps; `teach` and `forget` change both
+slots. On a map the wind-up slot does not train on, runs open with a recorded
+wind-up instead of its learned one.
 
 Track points are 92 units apart on every map, because that is what the policy
 learned on. A track built at another spacing changes what it sees ahead.

@@ -515,6 +515,10 @@ by three separate reviews before it counted. What it found and what changed:
   servers, and an evaluation cut short is not scored. With 11 servers the learner
   threw away its slowest batches as stale, which were mostly the best surf_demise
   ones; the limit now grows with the number of servers.
+- **Wind-up on other maps.** The wind-up slot trained on surf_demise only, but the
+  main slot opened surf_utopia_njv runs and evaluations with it, a wind-up that had
+  never seen that start zone. It now trains on both maps, `teach` adds a map to
+  both slots, and a map the wind-up does not train on opens with a recorded one.
 
 ## Why training stalled
 

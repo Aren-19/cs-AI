@@ -76,8 +76,8 @@ Kept minimal, and stored as patches in `web/patches/`:
 ## Licensing — read before publishing
 
 **Both upstream repos are public but carry no LICENSE file**, which under default
-copyright means all rights reserved. Cloning and running locally for yourself is
-the ordinary case. **Hosting a copy publicly is not permitted without the
+copyright means all rights reserved. Cloning and running a local copy for
+personal use is the ordinary case. **Hosting a copy publicly is not permitted without the
 author's consent** — ask first.
 
 Separately, the CS:S map and texture assets this serves are Valve's. A public

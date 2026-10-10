@@ -79,6 +79,21 @@ if (-not $Map) {
 # evaluations take turns. The first map is the one reports are about.
 $Maps = @($Map -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $Map = $Maps[0]
+
+# Main opens runs with the partner slot's learned wind-up only on maps that slot
+# trains on; anywhere else that wind-up has never practised, so a recorded one opens.
+$PartnerMaps = @()
+if ($Partner -and $Windup -le 0) {
+    $pf = Join-Path $DataDir $(if ($Partner -eq 'main') { 'daemon_args.txt' } else { "daemon_args_$Partner.txt" })
+    $pm = 'surf_demise'
+    if (Test-Path $pf) {
+        $t = @(([string](Get-Content $pf -Raw)).Trim([char]0xFEFF + " `t`r`n") -split '\s+')
+        $i = [array]::IndexOf($t, '-Map')
+        if ($i -ge 0 -and $i + 1 -lt $t.Count) { $pm = $t[$i + 1] }
+    }
+    $PartnerMaps = @($pm -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+function Test-PartnerMap([string]$m) { return ($PartnerMaps.Count -eq 0 -or $PartnerMaps -contains $m) }
 # Best files are named after their map. Older ones kept the first map's under the
 # plain names; those belong to the first map of the list they were written with.
 foreach ($pair in @(@("best$Sfx.txt", "best$Sfx.$Map.txt"), @("ckpt_best$Sfx.npz", "ckpt_best$Sfx.$Map.npz"))) {
@@ -220,6 +235,7 @@ function Start-Learner {
 
 function Start-Actor([string]$level, [int]$id) {
     $cfg = $Levels[$level]
+    $am = $Maps[($id + $script:MapShift) % $Maps.Count]
     # A half-written batch from a killed server would otherwise sit there forever.
     Get-ChildItem $OutDir -Filter "a${id}_batch_*.bin" -ErrorAction SilentlyContinue | ForEach-Object {
         if (-not (Test-Path ([IO.Path]::ChangeExtension($_.FullName, '.done')))) {
@@ -229,7 +245,7 @@ function Start-Actor([string]$level, [int]$id) {
     $a = @(
         '+csai_actor', $id,
         '+csai_seed', (([int]((Get-Date).Ticks % 100000)) * 32 + $id * 7919 + 1),
-        '+map', $Maps[($id + $script:MapShift) % $Maps.Count],
+        '+map', $am,
         '+csai_train_batches', '1000000', '+csai_train_sync', '1',
         '+csai_batch', $cfg.Batch, '+csai_frameskip', $FrameSkip,
         '+csai_states', '1', '+csai_budget', '6000', '+csai_deviation', '600',
@@ -238,7 +254,7 @@ function Start-Actor([string]$level, [int]$id) {
         '+csai_prestrafe', '1', '+csai_switchcost', $SwitchCost, '+csai_devcost', $DevCost,
         '+csai_timecost', $TimeCost, '+csai_trimcost', $TrimCost,
         '+csai_finishbonus', $FinishBonus, '+csai_finishfloor', $FinishFloor,
-        '+csai_windup', $Windup, '+csai_learnedmix', $LearnedMix, '+csai_linejitter', $LineJitter,
+        '+csai_windup', $Windup, '+csai_learnedmix', $(if (Test-PartnerMap $am) { $LearnedMix } else { 0 }), '+csai_linejitter', $LineJitter,
         '+csai_mouseacc', $MouseAcc, '+csai_mousemax', $MouseMax,
         '+csai_minpress', $MinPress, '+csai_mincoast', $MinCoast, '+csai_maxcoast', $MaxCoast,
         '+csai_switchgap', $SwitchGap, '+csai_energyscale', $EnergyScale, '+csai_energyclamp', $EnergyClamp,
@@ -283,7 +299,8 @@ function Invoke-Eval {
     $evalPriority = if ($Levels[$appliedLevel].Priority -eq 'AboveNormal') { 'High' } else { 'AboveNormal' }
     $ea = @('-Runs', '8', '-Map', $m, '-Greedy', '1', '-Port', $EvalPort, '-Priority', $evalPriority,
             '-FrameSkip', $FrameSkip, '-DevCost', $DevCost, '-Windup', $Windup,
-            '-Partner', $Partner, '-MouseAcc', $MouseAcc, '-MouseMax', $MouseMax,
+            '-Partner', $Partner, '-Learned', $(if (Test-PartnerMap $m) { 1 } else { 0 }),
+            '-MouseAcc', $MouseAcc, '-MouseMax', $MouseMax,
             '-MinPress', $MinPress, '-MinCoast', $MinCoast, '-MaxCoast', $MaxCoast,
             '-SwitchGap', $SwitchGap, '-Timescale', '80', '-TimeoutSec', '600')
     if ($Slot) { $ea += @('-Slot', $Slot) }

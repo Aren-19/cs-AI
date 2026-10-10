@@ -168,6 +168,13 @@ switch ($Command.ToLower()) {
             Set-Maps 'main' ($maps + $MapName)
             Write-Host "added $MapName to training ($((@($maps) + $MapName) -join ', '))"
         }
+        # The other slots (the wind-up) practise on the same maps, so their policy
+        # is trained wherever main uses it.
+        foreach ($slot in (Get-Slots)) {
+            if ($slot -eq 'main') { continue }
+            $sm = @(Get-Maps $slot)
+            if ($sm -notcontains $MapName) { Set-Maps $slot ($sm + $MapName) }
+        }
         $running = @(Get-RunningSlots)
         if ($running.Count -gt 0) {
             Write-Host 'restarting training so the servers pick it up'
@@ -192,6 +199,11 @@ switch ($Command.ToLower()) {
             }
         }
         Set-Maps 'main' $maps
+        foreach ($slot in (Get-Slots)) {
+            if ($slot -eq 'main') { continue }
+            $sm = @(Get-Maps $slot | Where-Object { $_ -ne $MapName })
+            if ($sm.Count -gt 0) { Set-Maps $slot $sm }
+        }
         Write-Host "training on: $($maps -join ', ')"
         $running = @(Get-RunningSlots)
         if ($running.Count -gt 0) { Stop-Training $running; Start-Training $running }
