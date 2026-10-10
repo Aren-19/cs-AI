@@ -73,6 +73,18 @@ class Track(object):
         self.n = len(xs)
         self.length = self.s[-1] if self.n else 0.0
         self.pts = np.stack([self.x, self.y, self.z], axis=1)
+        # Stage teleports: neighbours far apart with no arc length between them.
+        # Nothing looks, projects or takes a heading across one (csai_track.inc).
+        self.brk = np.zeros(self.n, dtype=bool)
+        if self.n > 1:
+            gap = np.linalg.norm(np.diff(self.pts, axis=0), axis=1)
+            self.brk[:-1] = np.diff(self.s) + 100.0 < gap
+        self.stage_end = np.zeros(self.n, dtype=np.int64)
+        e = self.n - 1
+        for i in range(self.n - 1, -1, -1):
+            if self.brk[i]:
+                e = i
+            self.stage_end[i] = e
 
     def nearest(self, pos, hint):
         """Windowed search, exactly as the plugin does it. hint < 0 = full scan."""
@@ -95,7 +107,7 @@ class Track(object):
         for k in (-1, 0):
             a = idx + k
             b = a + 1
-            if a < 0 or b > self.n - 1:
+            if a < 0 or b > self.n - 1 or self.brk[a]:
                 continue
             pa = self.pts[a]
             e = self.pts[b] - pa
@@ -117,6 +129,8 @@ class Track(object):
         a, b = i, i + 1
         if b > self.n - 1:
             a, b = self.n - 2, self.n - 1
+        elif i >= 0 and self.brk[i]:
+            a, b = i - 1, i
         if a < 0:
             return 0.0
         return math.degrees(math.atan2(self.y[b] - self.y[a], self.x[b] - self.x[a]))
@@ -151,7 +165,7 @@ class Track(object):
         vr = math.radians(vel_yaw)
         cy, sy = math.cos(vr), math.sin(vr)
         for k, off in enumerate(LOOK_OFFSETS):
-            j = min(idx + off, self.n - 1)
+            j = min(idx + off, int(self.stage_end[idx]))
             js, ju = line_offset(line, self.s[j])
             jr = math.radians(self.tangent_yaw(j))
             rx = self.x[j] - math.sin(jr) * js - pos[0]

@@ -23,6 +23,9 @@ float g_fTrackX[MAX_TRACK];
 float g_fTrackY[MAX_TRACK];
 float g_fTrackZ[MAX_TRACK];
 float g_fTrackS[MAX_TRACK];      // cumulative arc length
+bool  g_bTrackBreak[MAX_TRACK];  // a stage teleport follows this point: it and the next are not joined
+int   g_iStageEnd[MAX_TRACK];    // last point of the stage this point is in
+int   g_iTrackStages = 1;
 int   g_iTrackCount  = 0;
 float g_fTrackLength = 0.0;
 int   g_iTrackHint   = -1;       // last nearest index, for incremental search
@@ -197,7 +200,32 @@ stock void Track_Load()
 	if (g_iTrackCount > 0)
 		g_fTrackLength = g_fTrackS[g_iTrackCount - 1];
 
-	PrintToServer("[CsAI] track: %d points, %.0f units", g_iTrackCount, g_fTrackLength);
+	// A stage teleport shows as two neighbouring points far apart with no arc
+	// length between them. Nothing may look ahead, project or take a heading
+	// across that gap: it runs straight through the map.
+	g_iTrackStages = 1;
+	for (int i = 0; i < g_iTrackCount; i++)
+	{
+		g_bTrackBreak[i] = false;
+		if (i + 1 < g_iTrackCount)
+		{
+			float d = SquareRoot(Sq(g_fTrackX[i + 1] - g_fTrackX[i]) + Sq(g_fTrackY[i + 1] - g_fTrackY[i]) + Sq(g_fTrackZ[i + 1] - g_fTrackZ[i]));
+			if (g_fTrackS[i + 1] - g_fTrackS[i] + 100.0 < d)
+			{
+				g_bTrackBreak[i] = true;
+				g_iTrackStages++;
+			}
+		}
+	}
+	int stageEnd = g_iTrackCount - 1;
+	for (int i = g_iTrackCount - 1; i >= 0; i--)
+	{
+		if (g_bTrackBreak[i])
+			stageEnd = i;
+		g_iStageEnd[i] = stageEnd;
+	}
+
+	PrintToServer("[CsAI] track: %d points, %.0f units, %d stage(s)", g_iTrackCount, g_fTrackLength, g_iTrackStages);
 	if (g_bTrackTruncated)
 	{
 		// Loud, because the consequence is a finish line in the middle of the map.
@@ -290,7 +318,7 @@ stock float Track_Project(const float pos[3], int idx, float closest[3], float &
 	{
 		int a = idx + k;
 		int b = a + 1;
-		if (a < 0 || b > g_iTrackCount - 1)
+		if (a < 0 || b > g_iTrackCount - 1 || g_bTrackBreak[a])
 			continue;
 
 		float ax = g_fTrackX[a], ay = g_fTrackY[a], az = g_fTrackZ[a];
@@ -329,6 +357,11 @@ stock float Track_TangentYaw(int i)
 	{
 		a = g_iTrackCount - 2;
 		b = g_iTrackCount - 1;
+	}
+	else if (i >= 0 && g_bTrackBreak[i])
+	{
+		a = i - 1;                       // the last point of a stage: its own last segment
+		b = i;
 	}
 	if (a < 0)
 		return 0.0;
@@ -401,8 +434,8 @@ stock void Track_BuildObs(const float pos[3], const float vel[3], int idx, float
 	for (int k = 0; k < LOOKAHEAD; k++)
 	{
 		int j = idx + g_iLookOffsets[k];
-		if (j > g_iTrackCount - 1)
-			j = g_iTrackCount - 1;
+		if (j > g_iStageEnd[idx])
+			j = g_iStageEnd[idx];         // the end of this stage, or of the route
 
 		float js, ju;
 		Track_LineOffset(g_fTrackS[j], js, ju);

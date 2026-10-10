@@ -833,11 +833,14 @@ stock void Ep_Finish(int outcome)
 	{
 		terminal = g_fFinishBonus;
 		// Only a run from the start has a clock comparable to the human's.
-		if (g_iEpStartState == 0 && g_fRefTime > 0.0)
+		if (g_iEpStartState == 0 && g_fRefTime > 0.0 && g_bEpClockOn)
 		{
 			float secs = float(g_iEpTick - g_iEpPreTicks) * GetTickInterval();
-			if (secs > 0.01)
-				terminal = g_fFinishBonus * Pow(g_fRefTime / secs, g_fTimePower);
+			// Bounded: no real run is a third faster than the record, and one
+			// absurd payout would swamp the learner's scale for good.
+			float ratio = (secs > 0.01) ? g_fRefTime / secs : 1.5;
+			if (ratio > 1.5) ratio = 1.5;
+			terminal = g_fFinishBonus * Pow(ratio, g_fTimePower);
 			if (terminal < g_fFinishFloor)
 				terminal = g_fFinishFloor;
 		}
@@ -1394,9 +1397,10 @@ stock bool Ep_CheckEnd(int client, const float pos[3], float s, float dist, cons
 	// A truncated track ends where the point limit cut it, not at the finish.
 	// A run finishes by entering the timer's end zone, as a player does. Without
 	// one, it finishes at the end of the route, on the route.
-	if (!g_bEpGround && g_bEndLoaded && End_Touching(pos, vel))
+	// The timer only finishes a run it is timing, never one still in the start zone.
+	if (!g_bEpGround && g_bEpClockOn && g_bEndLoaded && End_Touching(pos, vel))
 		return Ep_End(EP_FINISHED);
-	if (!g_bEpGround && !g_bEndLoaded && !g_bTrackTruncated && g_fTrackLength > 0.0 &&
+	if (!g_bEpGround && g_bEpClockOn && !g_bEndLoaded && !g_bTrackTruncated && g_fTrackLength > 0.0 &&
 	    s >= g_fTrackLength - 96.0 && dist <= g_fMaxDeviation)
 		return Ep_End(EP_FINISHED);
 	if (!g_bEpGround && dist > g_fMaxDeviation)

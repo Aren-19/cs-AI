@@ -519,6 +519,21 @@ by three separate reviews before it counted. What it found and what changed:
   main slot opened surf_utopia_njv runs and evaluations with it, a wind-up that had
   never seen that start zone. It now trains on both maps, `teach` adds a map to
   both slots, and a map the wind-up does not train on opens with a recorded one.
+- **Staged maps.** The route has a gap where a stage teleports to the next, but
+  the look-ahead, the heading and the projection ran straight across it, through
+  the map: on surf_dune a fifth of the decisions saw look-ahead inputs up to 50
+  times their usual size near the end of each stage. The gaps are found when the
+  route loads and nothing crosses them; surf_demise and surf_utopia_njv have none,
+  so nothing changes there.
+- **Finishing in the start zone.** A run could finish before the timer started,
+  on a map whose end zone is near the start, and the time payout had no upper
+  bound. A finish now needs the timer running, and the payout is capped at a run
+  a third faster than the record.
+- **Sharing servers.** When the other slot started or stopped, every server of
+  this one was restarted mid-batch; now only the difference is started or
+  stopped, after the change is seen twice. One server per later slot is held back
+  so the total stays within the machine. An evaluation cut short still gets its
+  human-likeness check.
 
 ## Why training stalled
 

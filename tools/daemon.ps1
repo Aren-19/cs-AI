@@ -130,16 +130,22 @@ function Get-SlotLevel([string]$s) {
 # Servers this slot runs at a level. The levels are for the whole machine: with
 # several slots running, main takes its share first and the others take what is
 # left, so the slots together never ask for more cores than there are (one is
-# kept for the learners). A slot always runs at least one.
+# kept for the learners). Each slot gets at least one, held back from the
+# earlier slots' shares.
 function Get-ActorCount([string]$lvl) {
     if ($ActorsOverride -gt 0) { return $ActorsOverride }
-    $slots = @(@(Get-Procs 'powershell.exe' '*daemon.ps1*' | Where-Object { $_.CommandLine -notlike '*-Stop*' } |
+    $sups = @(Get-Procs 'powershell.exe' '*daemon.ps1*')
+    # This supervisor is always among them; when it is not, the query failed, and
+    # a failed query must not read as running alone.
+    if ($script:Actors -gt 0 -and -not ($sups | Where-Object { $_.ProcessId -eq $PID })) { return $script:Actors }
+    $slots = @(@($sups | Where-Object { $_.CommandLine -notlike '*-Stop*' } |
                  ForEach-Object { Get-SlotOf $_.CommandLine }) + $Name | Select-Object -Unique |
                Sort-Object { if ($_ -eq 'main') { '' } else { $_ } })
     $room = [Environment]::ProcessorCount - 1
-    foreach ($s in $slots) {
+    for ($k = 0; $k -lt $slots.Count; $k++) {
+        $s = $slots[$k]
         $want = if ($s -eq $Name) { $Levels[$lvl].Actors } else { $Levels[(Get-SlotLevel $s)].Actors }
-        $n = [math]::Max(1, [math]::Min($want, $room))
+        $n = [math]::Max(1, [math]::Min($want, $room - ($slots.Count - 1 - $k)))
         if ($s -eq $Name) { return $n }
         $room -= $n
     }
@@ -367,6 +373,7 @@ Write-Log "  $Actors server(s) running on $([Environment]::ProcessorCount) logic
 
 $evalProc = $null
 $evalStartedAt = $null
+$pendingCount = $null
 $lastGen = Get-Gen
 $lastGenAt = Get-Date
 $stallWarned = $false
@@ -420,10 +427,7 @@ function Read-EvalResult {
     }
     if ($runs -eq 0) { return $null }
     # An eval killed by its time limit ran fewer runs than the others: not comparable.
-    if (-not ($block | Where-Object { $_ -match 'eval complete' })) {
-        Write-Log "  eval was cut short after $runs run(s) - not scored"
-        return $null
-    }
+    $complete = [bool]($block | Where-Object { $_ -match 'eval complete' })
     $med = 999.0
     if ($times.Count) {
         $st = @($times | Sort-Object)
@@ -435,7 +439,7 @@ function Read-EvalResult {
         $ownMed = ($st[[int][math]::Floor(($st.Count - 1) / 2)] + $st[[int][math]::Ceiling(($st.Count - 1) / 2)]) / 2
     }
     return [pscustomobject]@{ Gen = $gen; Runs = $runs; Finished = $times.Count; Median = $med
-                              Fastest = $fastest; Record = $record; OwnMedian = $ownMed }
+                              Fastest = $fastest; Record = $record; OwnMedian = $ownMed; Complete = $complete }
 }
 
 # How human the evaluated run looks, next to the record on that map.
@@ -471,6 +475,13 @@ function Update-Best {
     $r = Read-EvalResult
     if (-not $r) { return }
     $m = $script:EvalMap
+    if (-not $r.Complete) {
+        # Killed by its time limit after fewer runs than the others: not comparable,
+        # but the replay of the run it kept is saved and can still be judged.
+        Write-Log "  eval was cut short after $($r.Runs) run(s) - not scored"
+        if ($r.Gen -gt 0) { Test-Humanlike $m $r.Gen }
+        return
+    }
     $bestFile, $bestCkpt = Best-Paths $m
     $b = Read-Best $bestFile
     # gen, finished, runs, median, and the median of runs with the bot's own wind-up
@@ -530,9 +541,34 @@ while ($true) {
     # Power change: restart the servers with the new settings. The learner keeps going.
     $want = Get-Power
     $wantCount = Get-ActorCount $want
-    if ($want -ne $appliedLevel -or $wantCount -ne $Actors) {
-        if ($want -ne $appliedLevel) { Write-Log "power changed: $appliedLevel -> $want ($($Levels[$want].Desc))" }
-        else { Write-Log "another slot started or stopped: $Actors -> $wantCount server(s)" }
+    if ($want -eq $appliedLevel -and $wantCount -ne $Actors) {
+        # Another slot started or stopped. Only after a second look the same, so a
+        # supervisor restarting does not move servers twice, and only the
+        # difference: the servers already running keep their settings and batches.
+        if ($pendingCount -ne $wantCount) { $pendingCount = $wantCount }
+        else {
+            Write-Log "another slot started or stopped: $Actors -> $wantCount server(s)"
+            if ($wantCount -lt $Actors) {
+                for ($k = $wantCount; $k -lt $Actors; $k++) {
+                    if ($ActorPids.ContainsKey($k) -and (Test-MyActor $ActorPids[$k] $k)) {
+                        Stop-Process -Id $ActorPids[$k] -Force -ErrorAction SilentlyContinue
+                    }
+                    $ActorPids.Remove($k); $ActorSeen.Remove($k); $ActorLen.Remove($k)
+                }
+                $Actors = $wantCount
+            } else {
+                $oldCount = $Actors
+                $Actors = $wantCount
+                for ($i = $oldCount; $i -lt $Actors; $i++) { Restart-Actor $i; Start-Sleep -Seconds 2 }
+            }
+            $pendingCount = $null
+        }
+    } elseif ($wantCount -eq $Actors) {
+        $pendingCount = $null
+    }
+    if ($want -ne $appliedLevel) {
+        Write-Log "power changed: $appliedLevel -> $want ($($Levels[$want].Desc))"
+        $pendingCount = $null
         $newCount = $wantCount
         foreach ($k in @($ActorPids.Keys)) {
             if (Test-MyActor $ActorPids[$k] $k) { Stop-Process -Id $ActorPids[$k] -Force -ErrorAction SilentlyContinue }
