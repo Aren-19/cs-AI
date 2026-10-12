@@ -11,6 +11,8 @@ float g_fStateOrigin[MAX_STATES][3];
 float g_fStateAngles[MAX_STATES][3];
 float g_fStateVel[MAX_STATES][3];
 float g_fStateFrac[MAX_STATES];
+float g_fStateTime[MAX_STATES];
+float g_fStateS[MAX_STATES];      // place on the route from the record; -1 in older files
 int   g_iStateCount = 0;
 float g_fRefTime    = 0.0;   // the human's clean time for this map, seconds
 char  g_sStateMap[PLATFORM_MAX_PATH];
@@ -76,6 +78,8 @@ void LoadStates()
 
         int i = g_iStateCount;
         g_fStateFrac[i]      = StringToFloat(parts[1]);
+        g_fStateTime[i]      = StringToFloat(parts[2]);
+        g_fStateS[i]         = (n >= 14) ? StringToFloat(parts[13]) : -1.0;
         g_fStateOrigin[i][0] = StringToFloat(parts[3]);
         g_fStateOrigin[i][1] = StringToFloat(parts[4]);
         g_fStateOrigin[i][2] = StringToFloat(parts[5]);
@@ -153,18 +157,73 @@ public Action Cmd_States(int args)
     return Plugin_Handled;
 }
 
-/** Track fraction of each start state. Needs the track loaded. */
+// The engine caps each axis of the velocity at sv_maxvelocity (3500), so no run
+// is faster than this.
+#define STATE_SPEED 6100.0
+
+/**
+ * Point with arc length in [sLo, sHi] whose segments pass closest to pos; all
+ * points if none is in range. Points are 92 apart, so between two of them
+ * another stretch's point can be nearer than either, while the route line
+ * itself is not.
+ */
+static stock int States_NearestOnRoute(const float pos[3], float sLo, float sHi)
+{
+    bool any = false;
+    for (int i = 0; i < g_iTrackCount && !any; i++)
+        any = (g_fTrackS[i] >= sLo && g_fTrackS[i] <= sHi);
+    int best = -1;
+    float bestd = 0.0, closest[3], d;
+    for (int i = 0; i < g_iTrackCount; i++)
+    {
+        if (any && (g_fTrackS[i] < sLo || g_fTrackS[i] > sHi))
+            continue;
+        Track_Project(pos, i, closest, d);
+        if (best < 0 || d < bestd)
+        {
+            bestd = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+/**
+ * Track fraction of each start state. Needs the track loaded. Newer states
+ * files carry each state's place on the route; older ones are resolved in
+ * route order, each within reach of the one before, so a stretch that passes
+ * close to another is not mistaken for it. tools/rollout.py does the same.
+ */
 stock void States_ResolveFractions()
 {
     if (g_iTrackCount == 0)
         return;
+    float prevS = 0.0;
     for (int i = 0; i < g_iStateCount; i++)
     {
-        int ti = Track_Nearest(g_fStateOrigin[i], -1);
+        float lo, hi;
+        if (g_fStateS[i] >= 0.0)
+        {
+            lo = g_fStateS[i] - 300.0;
+            hi = g_fStateS[i] + 300.0;
+        }
+        else if (i == 0)
+        {
+            lo = -3000.0;
+            hi = 3000.0;
+        }
+        else
+        {
+            float dt = g_fStateTime[i] - g_fStateTime[i - 1];
+            lo = prevS - 600.0;
+            hi = prevS + STATE_SPEED * ((dt > 0.0) ? dt : 0.0) + 600.0;
+        }
+        int ti = States_NearestOnRoute(g_fStateOrigin[i], lo, hi);
         if (ti < 0)
             continue;
         float closest[3], dist;
         float s = Track_Project(g_fStateOrigin[i], ti, closest, dist);
+        prevS = s;
         if (g_fTrackLength > 0.0)
             g_fStateFrac[i] = s / g_fTrackLength;
     }

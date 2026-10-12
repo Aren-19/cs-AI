@@ -96,21 +96,31 @@ stock void Zone_Load()
 		PrintToServer("[CsAI] no end zone for %s - a run finishes at the end of the route", map);
 }
 
-/** Inside the start zone as shavit counts it: its trigger is the box shrunk by 16 sideways and 31 vertically. */
-stock bool Zone_Touching(const float pos[3])
+/** Height of the player's box: 62 standing, 45 ducked. */
+stock float Zone_Hull(int client)
+{
+	return (GetEntityFlags(client) & FL_DUCKING) ? 45.0 : 62.0;
+}
+
+/**
+ * Inside the start zone as shavit counts it: its trigger is the box shrunk by
+ * 16 sideways and 31 (half a standing player) vertically, and the player's own
+ * box, hull units tall, has to reach into it.
+ */
+stock bool Zone_Touching(const float pos[3], float hull)
 {
 	if (!g_bZoneLoaded)
 		return false;
 	return pos[0] >= g_fZoneMin[0] && pos[0] <= g_fZoneMax[0]
 	    && pos[1] >= g_fZoneMin[1] && pos[1] <= g_fZoneMax[1]
-	    && pos[2] < g_fZoneMax[2] - 31.0 && pos[2] + 72.0 > g_fZoneMin[2] + 31.0;
+	    && pos[2] < g_fZoneMax[2] - 31.0 && pos[2] + hull > g_fZoneMin[2] + 31.0;
 }
 
-stock bool End_Inside(const float p[3])
+stock bool End_Inside(const float p[3], float hull)
 {
 	return p[0] >= g_fEndMin[0] - 16.0 && p[0] <= g_fEndMax[0] + 16.0
 	    && p[1] >= g_fEndMin[1] - 16.0 && p[1] <= g_fEndMax[1] + 16.0
-	    && p[2] < g_fEndMax[2] - 31.0 && p[2] + 72.0 > g_fEndMin[2] + 31.0;
+	    && p[2] < g_fEndMax[2] - 31.0 && p[2] + hull > g_fEndMin[2] + 31.0;
 }
 
 /**
@@ -118,18 +128,18 @@ stock bool End_Inside(const float p[3])
  * this tick's move takes it in. Fitted on the recorded runs, whose timers all
  * stop on the tick found this way. tools/setup_map.py times the record the same way.
  */
-stock bool End_Touching(const float pos[3], const float vel[3])
+stock bool End_Touching(const float pos[3], const float vel[3], float hull)
 {
 	if (!g_bEndLoaded)
 		return false;
-	if (End_Inside(pos))
+	if (End_Inside(pos, hull))
 		return true;
 	float dt = GetTickInterval();
 	float next[3];
 	next[0] = pos[0] + vel[0] * dt;
 	next[1] = pos[1] + vel[1] * dt;
 	next[2] = pos[2] + vel[2] * dt;
-	return End_Inside(next);
+	return End_Inside(next, hull);
 }
 
 /** Horizontal distance from the player to the nearest side of the start zone, as the timer measures it; negative outside. */

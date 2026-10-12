@@ -534,6 +534,19 @@ by three separate reviews before it counted. What it found and what changed:
   stopped, after the change is seen twice. One server per later slot is held back
   so the total stays within the machine. An evaluation cut short still gets its
   human-likeness check.
+- **Restart points on a route that passes near itself.** Each restart point was
+  placed on the route by the nearest route point anywhere, and route points are
+  92 units apart, so where another stretch passes close by, a point could land on
+  it: on surf_dune 5% of the record's ticks would. The states file now carries
+  each point's place on the route, taken from the record, and older files are
+  placed in route order by distance to the route line. The current points on all
+  three maps were already right and do not move.
+- **Zones.** setup_map took the first start and end zone it found in the timer's
+  database without checking the record uses them; a map with two end zones could
+  get one no run ever reaches. It now takes the ones the record leaves and
+  reaches, and leaves out an end zone the record never reaches. The zone tests
+  also used a 72-unit player, where CS:S is 62 standing and 45 ducked. Neither
+  changes anything on the current maps.
 
 ## Why training stalled
 

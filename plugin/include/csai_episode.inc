@@ -610,7 +610,7 @@ stock int Ep_WindupTick(int client, const float pos[3], const float vel[3],
 	}
 	else
 	{
-		if (!g_bZoneLoaded || !Zone_Touching(pos))
+		if (!g_bZoneLoaded || !Zone_Touching(pos, Zone_Hull(client)))
 			return TAKEOFF_EXIT;
 		if (onGround && g_iWindupAirTicks > 4)
 			return TAKEOFF_LANDED;
@@ -1024,7 +1024,7 @@ stock void Ep_Reset()
 	g_iEpPreTicks   = 0;
 	g_iEpClockTick  = 0;
 	g_iEpTakeoffTick = 0;
-	g_bEpClockOn    = !Zone_Touching(pos);    // mid-map starts are already on the clock
+	g_bEpClockOn    = !Zone_Touching(pos, Zone_Hull(g_iBot));    // mid-map starts are already on the clock
 	g_bEpGround     = false;
 	g_bEpFollow     = false;
 	g_iEpTakeoff    = TAKEOFF_NONE;
@@ -1148,7 +1148,7 @@ stock bool Ep_Tick(int client, int &buttons, float movement[3], float angles[3])
 
 	// The timer starts on leaving the start zone, and the server caps the combined
 	// speed kept at that moment. shavit ignores bots, so both are applied here.
-	if (!g_bEpClockOn && !g_bEpGround && !Zone_Touching(pos))
+	if (!g_bEpClockOn && !g_bEpGround && !Zone_Touching(pos, Zone_Hull(client)))
 		Ep_StartClock(client, vel);
 
 	// A map teleport moves the bot further in one tick than it can travel. On a
@@ -1398,7 +1398,7 @@ stock bool Ep_CheckEnd(int client, const float pos[3], float s, float dist, cons
 	// A run finishes by entering the timer's end zone, as a player does. Without
 	// one, it finishes at the end of the route, on the route.
 	// The timer only finishes a run it is timing, never one still in the start zone.
-	if (!g_bEpGround && g_bEpClockOn && g_bEndLoaded && End_Touching(pos, vel))
+	if (!g_bEpGround && g_bEpClockOn && g_bEndLoaded && End_Touching(pos, vel, Zone_Hull(client)))
 		return Ep_End(EP_FINISHED);
 	if (!g_bEpGround && g_bEpClockOn && !g_bEndLoaded && !g_bTrackTruncated && g_fTrackLength > 0.0 &&
 	    s >= g_fTrackLength - 96.0 && dist <= g_fMaxDeviation)

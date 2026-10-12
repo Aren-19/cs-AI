@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from ppo import Policy, Value, Adam, log_softmax, write_weights
-from rollout import Track, OBS_DIM, N_ACTIONS
+from rollout import Track, OBS_DIM, N_ACTIONS, state_arclengths
 
 from game import GAME
 CSTRIKE = os.path.join(GAME, "cstrike")
@@ -83,11 +83,8 @@ def checkpoints(map_name):
             if not line or line.startswith("#"):
                 continue
             rows.append([float(x) for x in line.split()])
-    out = []
-    for r in rows:
-        idx = tr.nearest(r[3:6], -1)
-        s, _, _ = tr.project(r[3:6], idx)
-        out.append((r[1], 100.0 * s / tr.length))
+    rows = [r for r in rows if len(r) >= 13]
+    out = [(r[1], 100.0 * s / tr.length) for r, s in zip(rows, state_arclengths(tr, rows))]
     return out, tr
 
 def load_dump(path, tr):

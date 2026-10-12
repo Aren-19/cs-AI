@@ -23,6 +23,7 @@ SMDATA  = os.path.join(CSTRIKE, r"addons\sourcemod\data")
 
 IN_JUMP, IN_FORWARD, IN_MOVELEFT, IN_MOVERIGHT = 2, 8, 512, 1024
 FL_ONGROUND = 1
+FL_DUCKING = 2
 SERVER_TICK = 66.67      # the bot runs at this; a record from another tickrate is converted
 
 # What the recorded human runs stay within, with a little room. Turn speed in
@@ -96,8 +97,9 @@ def measure(path, mapname):
     z = zone(mapname)
     if z is not None:
         mn, mx = z
+        hull = np.where((flg & FL_DUCKING) != 0, 45.0, 62.0)
         inside = ((pos[:, 0] >= mn[0]) & (pos[:, 0] <= mx[0]) & (pos[:, 1] >= mn[1]) & (pos[:, 1] <= mx[1]) &
-                  (pos[:, 2] < mx[2] - 31) & (pos[:, 2] + 72 > mn[2] + 31))
+                  (pos[:, 2] < mx[2] - 31) & (pos[:, 2] + hull > mn[2] + 31))
         exit_tick = next((i for i in range(pre, end) if not inside[i]), None)
         if exit_tick is not None and exit_tick - pre > 2:
             pre = exit_tick

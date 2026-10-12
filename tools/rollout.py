@@ -98,6 +98,21 @@ class Track(object):
         d = self.pts[lo:hi + 1] - pos
         return lo + int(np.argmin(np.einsum("ij,ij->i", d, d)))
 
+    def nearest_on_route(self, pos, lo, hi):
+        """Point with arc length in [lo, hi] whose segments pass closest to pos;
+        all points if none is in range (csai_bot.inc States_NearestOnRoute).
+        Points are 92 apart, so between two of them another stretch's point
+        can be nearer than either, while the route line itself is not."""
+        idx = np.nonzero((self.s >= lo) & (self.s <= hi))[0]
+        if len(idx) == 0:
+            idx = range(self.n)
+        best, best_d = -1, 0.0
+        for i in idx:
+            d = self.project(pos, int(i))[2]
+            if best < 0 or d < best_d:
+                best, best_d = int(i), d
+        return best
+
     def project(self, pos, idx):
         """Project onto the two segments adjacent to idx. Returns (s, closest, dist)."""
         best_s = self.s[idx]
@@ -323,19 +338,45 @@ def batch_stats(eps):
         "outcomes": outcomes,
     }
 
+# The engine caps each axis of the velocity at sv_maxvelocity (3500), so no run
+# is faster than this; bounds where the next start state can be in an older
+# states file (csai_bot.inc).
+STATE_SPEED = 6100.0
+
+
+def state_arclengths(track, rows):
+    """Arc length of each start state, from the states file's fields.
+
+    Newer files carry it, taken from the record. Older ones are resolved in
+    route order, each within reach of the one before, so a stretch that passes
+    close to another is not mistaken for it. csai_bot.inc does the same.
+    """
+    out = []
+    prev_s = prev_t = None
+    for p in rows:
+        pos = np.array([float(p[3]), float(p[4]), float(p[5])])
+        if len(p) >= 14:
+            lo, hi = float(p[13]) - 300.0, float(p[13]) + 300.0
+        elif prev_s is None:
+            lo, hi = -3000.0, 3000.0
+        else:
+            lo = prev_s - 600.0
+            hi = prev_s + STATE_SPEED * max(float(p[2]) - prev_t, 0.0) + 600.0
+        s, _c, _d = track.project(pos, track.nearest_on_route(pos, lo, hi))
+        out.append(s)
+        prev_s, prev_t = s, float(p[2])
+    return np.array(out)
+
+
 def load_state_arclengths(track, states_path):
     """Arc length of each replay start state."""
-    out = []
+    rows = []
     with open(states_path) as fh:
         for line in fh:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             p = line.split()
-            if len(p) < 13:
-                continue
-            pos = np.array([float(p[3]), float(p[4]), float(p[5])])
-            idx = track.nearest(pos, -1)
-            s, _c, _d = track.project(pos, idx)
-            out.append(s)
-    return np.array(out)
+            if len(p) >= 13:
+                rows.append(p)
+    return state_arclengths(track, rows)

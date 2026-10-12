@@ -15,6 +15,7 @@ REPLAYBOT = os.path.join(CSTRIKE, r"addons\sourcemod\data\replaybot")
 SHAVIT_DB = os.path.join(CSTRIKE, r"addons\sourcemod\data\sqlite\shavit-local.sq3")
 
 ARTEFACTS = ("track", "states", "prestrafe", "demo")
+IN_DUCK = 4
 
 # csai_episode.inc: further than this from the centerline ends the episode.
 MAX_DEVIATION = 600.0
@@ -41,20 +42,81 @@ def find_replay(map_name, given):
 def paths(map_name):
     return {a: os.path.join(DATA, "%s_%s.txt" % (map_name, a)) for a in ARTEFACTS}
 
+def read_demo(path):
+    """Positions, player heights and preframes of a <map>_demo.txt, or None."""
+    if not os.path.isfile(path):
+        return None
+    pre = header_value(path, "preframes=", int)
+    frames, hulls = [], []
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            for line in fh:
+                if line.startswith("#") or not line.strip():
+                    continue
+                f = line.split()
+                frames.append((float(f[1]), float(f[2]), float(f[3])))
+                # Demo files keep the keys, not the flags; a duck in the air is
+                # instant, so a held duck key is a ducked player.
+                hulls.append(45.0 if len(f) > 6 and int(f[6]) & IN_DUCK else 62.0)
+    except (OSError, ValueError):
+        return None
+    if pre is None or not frames:
+        return None
+    return frames, hulls, pre
+
+def pick_zones(starts, ends, demo):
+    """The start zone the record leaves and the end zone it reaches first.
+
+    A map can have several zones of one kind. Without a record to go by, the
+    first of each is used. With one, an end zone the record never reaches is
+    left out, so the plugin finishes runs at the end of the route instead.
+    """
+    if demo is None:
+        return (starts[0] if starts else None), (ends[0] if ends else None), []
+    frames, hulls, pre = demo
+    notes = []
+    upto = min(pre + 1, len(frames))
+    hits = [sum(1 for i in range(upto) if zone_touching(frames[i], z, hulls[i])) for z in starts]
+    start = None
+    if starts:
+        best = max(range(len(starts)), key=lambda k: (hits[k], -k))
+        start = starts[best]
+        if hits[best] == 0:
+            notes.append("the record never stands in the timer's start zone; check it in game")
+    end = None
+    if ends and start is not None:
+        exit_tick = next((i for i in range(pre, len(frames))
+                          if not zone_touching(frames[i], start, hulls[i])), None)
+        first = None
+        if exit_tick is not None:
+            for z in ends:
+                t = next((i for i in range(exit_tick + 1, len(frames))
+                          if end_touching(frames[i], frames[i - 1], z, hulls[i])), None)
+                if t is not None and (first is None or t < first):
+                    first, end = t, z
+        if end is None:
+            notes.append("the record never reaches the timer's end zone; runs finish at the end of the route")
+    return start, end, notes
+
 def write_zone(map_name):
     """Copy shavit's start and end zones (main track) to <map>_zone.txt for the plugin."""
     import sqlite3
     if not os.path.isfile(SHAVIT_DB):
         return None
+    # Box zones only: a zone hooked to a map trigger or button has no real corners.
     q = ("SELECT corner1_x, corner1_y, corner1_z, corner2_x, corner2_y, corner2_z "
-         "FROM mapzones WHERE lower(map) = lower(?) AND type = ? AND track = 0 LIMIT 1")
+         "FROM mapzones WHERE lower(map) = lower(?) AND type = ? AND track = 0 "
+         "AND (form IS NULL OR form = 0) ORDER BY id")
     try:
         db = sqlite3.connect("file:%s?mode=ro" % SHAVIT_DB.replace("\\", "/"), uri=True)
-        start = db.execute(q, (map_name, 0)).fetchone()
-        end = db.execute(q, (map_name, 1)).fetchone()
+        starts = db.execute(q, (map_name, 0)).fetchall()
+        ends = db.execute(q, (map_name, 1)).fetchall()
         db.close()
     except sqlite3.Error:
         return None
+    start, end, notes = pick_zones(starts, ends, read_demo(paths(map_name)["demo"]))
+    for n in notes:
+        print("  %s" % n)
     if not start:
         return None
     os.makedirs(DATA, exist_ok=True)
@@ -66,7 +128,7 @@ def write_zone(map_name):
             fh.write("end %s\n" % " ".join("%.3f" % v for v in end))
     return path
 
-def end_touching(pos, prev, zone):
+def end_touching(pos, prev, zone, hull=62.0):
     """The end zone is reached: the player is in it, or the move it is making
     takes it in (csai_track.inc End_Touching). The recorded runs' timers all stop
     on the frame this finds."""
@@ -75,17 +137,18 @@ def end_touching(pos, prev, zone):
     hi = (max(x0, x1) + 16, max(y0, y1) + 16)
     def inside(p):
         return (lo[0] <= p[0] <= hi[0] and lo[1] <= p[1] <= hi[1] and
-                p[2] < max(z0, z1) - 31 and p[2] + 72 > min(z0, z1) + 31)
+                p[2] < max(z0, z1) - 31 and p[2] + hull > min(z0, z1) + 31)
     nxt = tuple(pos[k] + (pos[k] - prev[k]) for k in range(3))
     return inside(pos) or inside(nxt)
 
-def zone_touching(pos, zone):
+def zone_touching(pos, zone, hull=62.0):
     """Inside the zone as shavit counts it: its trigger is the box shrunk by 16
-    sideways and 31 vertically, so the player's centre has to be in the box."""
+    sideways and 31 vertically, so the player's centre has to be in the box and
+    the player, hull units tall (62 standing, 45 ducked), has to reach into it."""
     x0, y0, z0, x1, y1, z1 = zone
     return (min(x0, x1) <= pos[0] <= max(x0, x1) and
             min(y0, y1) <= pos[1] <= max(y0, y1) and
-            pos[2] < max(z0, z1) - 31 and pos[2] + 72 > min(z0, z1) + 31)
+            pos[2] < max(z0, z1) - 31 and pos[2] + hull > min(z0, z1) + 31)
 
 def rezone_reference(map_name):
     """Re-time the reference run from leaving the start zone instead of from the jump.
@@ -105,18 +168,12 @@ def rezone_reference(map_name):
                 zone = [float(v) for v in f[1:]]
             elif len(f) == 7 and f[0] == "end":
                 end = [float(v) for v in f[1:]]
-    pre = header_value(p["demo"], "preframes=", int)
+    demo = read_demo(p["demo"])
     rate = header_value(p["demo"], "tickrate=")
-    if zone is None or pre is None or not rate:
+    if zone is None or demo is None or not rate:
         return None
-    frames = []
-    with open(p["demo"], encoding="utf-8-sig") as fh:
-        for line in fh:
-            if line.startswith("#") or not line.strip():
-                continue
-            f = line.split()
-            frames.append((float(f[1]), float(f[2]), float(f[3])))
-    exit_tick = next((i for i in range(pre, len(frames)) if not zone_touching(frames[i], zone)), None)
+    frames, hulls, pre = demo
+    exit_tick = next((i for i in range(pre, len(frames)) if not zone_touching(frames[i], zone, hulls[i])), None)
     if exit_tick is None:
         return None
 
@@ -130,7 +187,8 @@ def rezone_reference(map_name):
     # first tick inside the end zone. Without an end zone, from the jump time.
     enter = None
     if end is not None:
-        enter = next((i for i in range(exit_tick + 1, len(frames)) if end_touching(frames[i], frames[i - 1], end)), None)
+        enter = next((i for i in range(exit_tick + 1, len(frames))
+                      if end_touching(frames[i], frames[i - 1], end, hulls[i])), None)
     if enter is not None:
         new = (enter - exit_tick) / rate
     elif exit_tick - pre <= 2:
@@ -356,10 +414,10 @@ def main():
 
     print("== %s ==" % args.map)
     os.makedirs(DATA, exist_ok=True)
-    if write_zone(args.map):
-        print("  start zone copied from the timer's database")
-    retime(args.map)
     if args.check:
+        if write_zone(args.map):
+            print("  start zone copied from the timer's database")
+        retime(args.map)
         ok = report(args.map)
         print()
         print("ready to train" if ok else "NOT ready - see the problems above")
@@ -398,6 +456,9 @@ def main():
     for line in res.stdout.splitlines():
         if line.startswith(("clean frames", "clean time", "segment", "  ")) or "dropped" in line:
             print("  %s" % line.strip())
+    # The zones are picked by the new record, so they are copied after it.
+    if write_zone(args.map):
+        print("  start zone copied from the timer's database")
     retime(args.map)
     precache_viewer(args.map)
 

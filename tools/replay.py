@@ -205,11 +205,13 @@ def resample(frames, src_rate, dst_rate):
     return out
 
 def centerline(frames, spacing=64.0, jump=200.0):
-    """Resample the run by arc length, and say where it teleports."""
+    """Resample the run by arc length, and say where it teleports. Also gives,
+    for each frame, the last point laid down at or before it."""
     if not frames:
-        return [], []
+        return [], [], []
     pts = [frames[0].pos]
     brk = [False]
+    owner = [0]
     acc = 0.0
     for i in range(1, len(frames)):
         seg = _dist(frames[i - 1].pos, frames[i].pos)
@@ -222,6 +224,7 @@ def centerline(frames, spacing=64.0, jump=200.0):
             brk[-1] = True
             pts.append(frames[i].pos)
             brk.append(False)
+            owner.append(len(pts) - 1)
             acc = 0.0
             continue
         acc += seg
@@ -229,10 +232,36 @@ def centerline(frames, spacing=64.0, jump=200.0):
             pts.append(frames[i].pos)
             brk.append(False)
             acc -= spacing
+        owner.append(len(pts) - 1)
     if pts[-1] != frames[-1].pos:
         pts.append(frames[-1].pos)
         brk.append(False)
-    return pts, brk
+    return pts, brk, owner
+
+def arc_lengths(pts, brk):
+    """Cumulative arc length. The teleport gaps are not travel and add nothing."""
+    cum = [0.0]
+    for i in range(1, len(pts)):
+        cum.append(cum[-1] + (0.0 if brk[i - 1] else _dist(pts[i - 1], pts[i])))
+    return cum
+
+def arc_length_at(pts, brk, cum, idx, pos):
+    """Where pos lies along the centerline next to point idx (csai_track.inc Track_Project)."""
+    best_s, best_d = cum[idx], None
+    for a in (idx - 1, idx):
+        b = a + 1
+        if a < 0 or b >= len(pts) or brk[a]:
+            continue
+        e = [pts[b][j] - pts[a][j] for j in range(3)]
+        l2 = sum(v * v for v in e)
+        if l2 < 1e-4:
+            continue
+        t = sum((pos[j] - pts[a][j]) * e[j] for j in range(3)) / l2
+        t = min(max(t, 0.0), 1.0)
+        d = sum((pos[j] - pts[a][j] - e[j] * t) ** 2 for j in range(3))
+        if best_d is None or d < best_d:
+            best_d, best_s = d, cum[a] + (cum[b] - cum[a]) * t
+    return best_s
 
 def checkpoints(frames, count=24, tickrate=100.0):
     """Evenly spaced full states (position, angles, velocity) to restart from."""
@@ -363,8 +392,14 @@ def main():
     print("strafe keys    : %d/%d frames (%.1f%%), both-at-once %d"
           % (held, len(run), 100.0 * held / max(len(run), 1), both))
 
-    cl, cl_brk = centerline(run, args.spacing)
+    cl, cl_brk, cl_owner = centerline(run, args.spacing)
+    cum = arc_lengths(cl, cl_brk)
     cps = checkpoints(run, args.checkpoints, tr)
+    # Each state's place on the route, taken from where the record was at that
+    # tick. Found by position alone, a route that passes close to itself can put
+    # a state on the wrong stretch.
+    for c in cps:
+        c["s"] = arc_length_at(cl, cl_brk, cum, cl_owner[c["index"]], c["origin"])
     print("centerline     : %d points at %.0f-unit spacing" % (len(cl), args.spacing))
     print("checkpoints    : %d" % len(cps))
 
@@ -406,16 +441,16 @@ def main():
         if d:
             os.makedirs(d, exist_ok=True)
         with open(args.states, "w") as fh:
-            print("# csai states v1  map=%s tickrate=%.2f clean_time=%.3f"
+            print("# csai states v2  map=%s tickrate=%.2f clean_time=%.3f"
                   % (r.map, tr, len(run) / tr), file=fh)
-            print("# idx frac time x y z pitch yaw vx vy vz flags movetype", file=fh)
+            print("# idx frac time x y z pitch yaw vx vy vz flags movetype s", file=fh)
             for k, c in enumerate(cps):
-                print("%d %.6f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %d %d"
+                print("%d %.6f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %d %d %.3f"
                       % (k, c["frac"], c["time"],
                          c["origin"][0], c["origin"][1], c["origin"][2],
                          c["angles"][0], c["angles"][1],
                          c["velocity"][0], c["velocity"][1], c["velocity"][2],
-                         c["flags"], c["movetype"]), file=fh)
+                         c["flags"], c["movetype"], c["s"]), file=fh)
         print("states file    : %s (%d states)" % (args.states, len(cps)))
 
     if args.track:
@@ -426,10 +461,6 @@ def main():
             os.makedirs(d, exist_ok=True)
         # Arc length skips the teleport gaps: the distance across one is not
         # travel and must not be rewarded as progress.
-        cum = [0.0]
-        for i in range(1, len(cl)):
-            step = 0.0 if cl_brk[i - 1] else _dist(cl[i - 1], cl[i])
-            cum.append(cum[-1] + step)
         with open(args.track, "w") as fh:
             print("# csai track v1  map=%s tickrate=%.2f clean_time=%.3f points=%d length=%.1f"
                   % (r.map, tr, len(run) / tr, len(cl), cum[-1]), file=fh)

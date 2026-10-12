@@ -181,7 +181,8 @@ CsAI.bat teach surf_dune
 
 It locates the timer's replay for that map, derives the reference line, the
 restart checkpoints and the recorded wind-up, validates the result, copies the
-start zone from the timer's database, times the reference run from leaving it,
+start and end zones the record uses from the timer's database, times the
+reference run from leaving the start zone,
 adds the map to `-Map` in `data/daemon_args.txt` and restarts training if it is
 running. Maps found in `download/maps` count as installed.
 `CsAI.bat forget surf_dune` takes it out again.
